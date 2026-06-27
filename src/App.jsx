@@ -1,0 +1,852 @@
+import { useState, useEffect, useMemo, useCallback } from "react";
+
+// ─────────────────────────────────────────────
+//  Supabase (백그라운드 동기화용)
+// ─────────────────────────────────────────────
+const SB = "https://yigtucvlikxeddqghtqw.supabase.co";
+const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpZ3R1Y3ZsaWt4ZWRkcWdodHF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTcwNjgsImV4cCI6MjA5Nzg3MzA2OH0.MoTdu9sYMOLIaLhCNY9Ivs3hg32MbiHoqlOMcbRpIwY";
+const H  = { apikey: KEY, Authorization: `Bearer ${KEY}` };
+const ADMIN_PW = "신전2025";
+
+// Supabase 요청 (실패해도 조용히)
+const sbFetch = async (path) => {
+  try {
+    const r = await fetch(`${SB}/rest/v1/${path}`, { headers: H });
+    return r.ok ? r.json() : null;
+  } catch { return null; }
+};
+const sbInsert = async (table, body) => {
+  try {
+    await fetch(`${SB}/rest/v1/${table}`, {
+      method: "POST",
+      headers: { ...H, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify(body),
+    });
+  } catch {}
+};
+const sbDelete = async (table, filter) => {
+  try {
+    await fetch(`${SB}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: H });
+  } catch {}
+};
+
+// ─────────────────────────────────────────────
+//  디자인
+// ─────────────────────────────────────────────
+const C = {
+  navy:"#1A2A45", blue:"#2B58B8", accent:"#C8A655",
+  bg:"#F0F4FB", card:"#fff", border:"#DAE0EF",
+  tx:"#1A2A45", mid:"#475070", light:"#8290B0",
+  ok:"#059669", warn:"#D97706", err:"#DC2626",
+};
+
+// ─────────────────────────────────────────────
+//  상수
+// ─────────────────────────────────────────────
+const STUDIOS = [
+  { id:"A", name:"스튜디오 A", seats:10, color:"#2B58B8", bg:"#EBF0FB" },
+  { id:"B", name:"스튜디오 B", seats:10, color:"#7C3AED", bg:"#F3EFFE" },
+  { id:"C", name:"스튜디오 C", seats:8,  color:"#059669", bg:"#ECFDF5" },
+  { id:"D", name:"스튜디오 D", seats:4,  color:"#D97706", bg:"#FFFBEB" },
+];
+
+// 09:00 ~ 21:30 (30분 단위)
+const SLOTS = [];
+for (let h = 9; h < 22; h++) {
+  SLOTS.push(`${String(h).padStart(2,"0")}:00`);
+  if (h < 21) SLOTS.push(`${String(h).padStart(2,"0")}:30`);
+}
+SLOTS.push("21:30");
+
+// 공지 기준 고정 잠금 (0=일 1=월 2=화 3=수 4=목 5=금 6=토)
+const FIXED = [
+  { s:"A", d:[0,1,2,3,4,5,6], t1:"09:00", t2:"22:00", r:"재오픈 준비중" },
+  { s:"C", d:[0,1,2,3,4,5,6], t1:"09:00", t2:"22:00", r:"재오픈 준비중" },
+  { s:"B", d:[6],             t1:"09:00", t2:"22:00", r:"강의" },
+  { s:"B", d:[0],             t1:"09:00", t2:"18:00", r:"강의" },
+  { s:"B", d:[3,4],           t1:"18:00", t2:"22:00", r:"강의" },
+];
+const DAY = ["일","월","화","수","목","금","토"];
+
+// ─────────────────────────────────────────────
+//  반 목록
+// ─────────────────────────────────────────────
+const CLASSES = [
+  ...Array.from({length:26},(_,i)=>String.fromCharCode(65+i)+"반"),
+  "온라인","무한모의고사반","기타"
+];
+
+// ─────────────────────────────────────────────
+//  유틸
+// ─────────────────────────────────────────────
+const uid    = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const add30  = t => { const [h,m]=t.split(":").map(Number),tot=h*60+m+30; return `${String(Math.floor(tot/60)).padStart(2,"0")}:${String(tot%60).padStart(2,"0")}`; };
+const toStr  = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),dd=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${dd}`; };
+const dow    = s => new Date(s+"T12:00:00").getDay();
+const fmt    = s => { const [,m,d]=s.split("-"); return `${parseInt(m)}.${parseInt(d)}`; };
+const today  = () => toStr(new Date());
+
+// 전날 9시에 예약 오픈
+const isOpen = ds => {
+  const [y,mo,d]=ds.split("-").map(Number);
+  return new Date() >= new Date(y,mo-1,d-1,9,0,0);
+};
+const getDates = () => Array.from({length:4},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return toStr(d); });
+
+// 고정 잠금 확인
+const fixedLock = (sid,ds,slot) => {
+  const day=dow(ds), end=add30(slot);
+  return FIXED.find(f=>f.s===sid&&f.d.includes(day)&&f.t1<end&&f.t2>slot);
+};
+
+// 수동 잠금 확인
+const manualLock = (locks,sid,slot) => {
+  const end=add30(slot);
+  return locks.find(l=>(l.studio_id===sid||l.studio_id==="ALL")&&l.start_time<end&&l.end_time>slot);
+};
+
+// 슬롯 잠금 여부 + 이유
+const slotLock = (locks,sid,ds,slot) => {
+  const fix=fixedLock(sid,ds,slot);
+  if(fix) return fix.r;
+  const man=manualLock(locks,sid,slot);
+  if(man) return man.reason||"강의";
+  return null;
+};
+
+// 슬롯 예약 인원
+const slotBooked = (res,sid,slot) => {
+  const end=add30(slot);
+  return res.filter(r=>r.studio_id===sid&&r.start_time<end&&r.end_time>slot).length;
+};
+
+// 슬롯 색상
+const slotStyle = (booked,total,locked) => {
+  if(locked) return { bg:"#F1F3F9", tc:"#A8B4CC", label:"🔒" };
+  const rem=total-booked;
+  if(rem<=0) return { bg:"#FEE2E2", tc:C.err,  label:"마감" };
+  if(rem<=2) return { bg:"#FEF3C7", tc:C.warn, label:`${rem}석` };
+  return       { bg:"#ECFDF5", tc:C.ok,   label:`${rem}석` };
+};
+
+// ─────────────────────────────────────────────
+//  소형 UI
+// ─────────────────────────────────────────────
+const Tag = ({c,bg,children}) => (
+  <span style={{background:bg||c+"1A",color:c,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700,display:"inline-flex",alignItems:"center"}}>{children}</span>
+);
+
+const Sheet = ({onClose,children}) => (
+  <div onClick={onClose} style={{position:"fixed",inset:0,background:"#00000099",zIndex:900,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+    <div onClick={e=>e.stopPropagation()}
+      style={{background:C.card,borderRadius:"20px 20px 0 0",padding:"28px 24px 36px",width:"100%",maxWidth:520,maxHeight:"85vh",overflowY:"auto"}}>
+      <div style={{width:40,height:4,borderRadius:99,background:C.border,margin:"-8px auto 20px"}}/>
+      {children}
+    </div>
+  </div>
+);
+
+// ─────────────────────────────────────────────
+//  예약 시트
+// ─────────────────────────────────────────────
+function BookSheet({ studio, date, s1, s2, onClose, onConfirm }) {
+  const [name,  setName]  = useState("");
+  const [cls,   setCls]   = useState("A반");
+  const [pw,    setPw]    = useState("");
+  const [err,   setErr]   = useState("");
+
+  const endTime = add30(s2);
+  const dur = (s => { const [h,m]=s.split(":").map(Number); return h*60+m; })(endTime) -
+              (s => { const [h,m]=s.split(":").map(Number); return h*60+m; })(s1);
+
+  const confirm = () => {
+    if (!name.trim())        { setErr("이름을 입력해주세요"); return; }
+    if (pw.length !== 4 || !/^[0-9]{4}$/.test(pw)) { setErr("비밀번호는 숫자 4자리로 입력해주세요"); return; }
+    const payload = { id:uid(), date, studio_id:studio.id, start_time:s1, end_time:endTime,
+      user_name:name.trim(), user_class:cls, user_pw:pw };
+    onConfirm(payload);
+    onClose();
+  };
+
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>예약하기</div>
+      <div style={{fontSize:13,color:C.mid,marginBottom:18}}>
+        <b style={{color:studio.color}}>{studio.name}</b> · {fmt(date)}({DAY[dow(date)]}) · <b>{s1} ~ {endTime}</b> ({dur}분)
+      </div>
+      {err && <div style={{background:"#FEF2F2",border:`1px solid #FECACA`,borderRadius:10,padding:"9px 14px",fontSize:12,color:C.err,marginBottom:12}}>{err}</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:20}}>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>이름 *</label>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="홍길동" autoFocus
+            onKeyDown={e=>e.key==="Enter"&&confirm()}
+            style={{width:"100%",padding:"13px 14px",borderRadius:11,
+              border:`1.5px solid ${err.includes("이름")&&!name.trim()?C.err:C.border}`,
+              fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>반 *</label>
+          <select value={cls} onChange={e=>setCls(e.target.value)}
+            style={{width:"100%",padding:"13px 14px",borderRadius:11,border:`1.5px solid ${C.border}`,
+              fontSize:15,outline:"none",background:C.card,cursor:"pointer"}}>
+            {CLASSES.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>예약 비밀번호 (숫자 4자리) *</label>
+          <input type="password" inputMode="numeric" maxLength={4} value={pw} onChange={e=>setPw(e.target.value.replace(/\D/g,"").slice(0,4))}
+            placeholder="예약 취소 시 필요해요"
+            style={{width:"100%",padding:"13px 14px",borderRadius:11,
+              border:`1.5px solid ${err.includes("비밀번호")&&pw.length!==4?C.err:C.border}`,
+              fontSize:15,outline:"none",boxSizing:"border-box",letterSpacing:8}}/>
+          <div style={{fontSize:10,color:C.light,marginTop:5}}>⚠️ 예약 취소 시 이 비밀번호가 필요합니다. 기억해주세요!</div>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={confirm}
+          style={{flex:1,background:C.blue,color:"#fff",border:"none",borderRadius:12,padding:14,fontWeight:800,cursor:"pointer",fontSize:15}}>
+          예약 확정
+        </button>
+        <button onClick={onClose}
+          style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",cursor:"pointer",color:C.mid,fontSize:13}}>
+          취소
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  완료 시트
+// ─────────────────────────────────────────────
+function DoneSheet({ booking, studio, onClose }) {
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{textAlign:"center",padding:"8px 0"}}>
+        <div style={{fontSize:52,marginBottom:8}}>✅</div>
+        <div style={{fontSize:20,fontWeight:900,color:C.navy,marginBottom:16}}>예약 완료!</div>
+        <div style={{background:studio.bg,borderRadius:14,padding:18,marginBottom:18,textAlign:"left",lineHeight:2}}>
+          <b style={{color:studio.color}}>{studio.name}</b><br/>
+          📅 {fmt(booking.date)} ({DAY[dow(booking.date)]})<br/>
+          🕐 {booking.start_time} ~ {booking.end_time}<br/>
+          👤 {booking.user_name} ({booking.user_class})
+        </div>
+        <div style={{background:"#FFF8E8",borderRadius:12,padding:14,fontSize:11,color:C.mid,textAlign:"left",lineHeight:1.9,marginBottom:20}}>
+          🏢 서울 송파구 석촌동 288-19 신공간빌딩 · 🔑 5555*<br/>
+          🚗 차량불가 · 🍱 취식자제 · 🧹 퇴실후 정리<br/>
+          💡 마지막 퇴실자: 소등 + 에어컨OFF + 문잠금
+        </div>
+        <button onClick={onClose}
+          style={{width:"100%",background:C.navy,color:"#fff",border:"none",borderRadius:12,padding:13,fontWeight:800,cursor:"pointer",fontSize:15}}>
+          확인
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  잠금 시트 (관리자)
+// ─────────────────────────────────────────────
+function LockSheet({ date, onClose, onConfirm }) {
+  const [sid,setSid]     = useState("B");
+  const [t1,setT1]       = useState("09:00");
+  const [t2,setT2]       = useState("22:00");
+  const [reason,setReason] = useState("강의");
+  const [err,setErr]     = useState("");
+
+  const save = () => {
+    if(t1>=t2){ setErr("종료시간이 시작보다 늦어야 해요"); return; }
+    onConfirm({ id:uid(), date, studio_id:sid, start_time:t1, end_time:t2, reason });
+    onClose();
+  };
+
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:20}}>🔒 강의 시간 잠금</div>
+      {err && <div style={{background:"#FEF2F2",borderRadius:10,padding:"9px 14px",fontSize:12,color:C.err,marginBottom:12}}>{err}</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:20}}>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>스튜디오</label>
+          <select value={sid} onChange={e=>setSid(e.target.value)}
+            style={{width:"100%",padding:"11px 12px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,outline:"none"}}>
+            <option value="ALL">전체 스튜디오</option>
+            {STUDIOS.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          {[["시작",t1,setT1],[" 종료",t2,setT2]].map(([lbl,val,set])=>(
+            <div key={lbl}>
+              <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>{lbl}</label>
+              <select value={val} onChange={e=>set(e.target.value)}
+                style={{width:"100%",padding:"11px 12px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,outline:"none"}}>
+                {[...SLOTS,"22:00"].map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>사유</label>
+          <input value={reason} onChange={e=>setReason(e.target.value)}
+            style={{width:"100%",padding:"11px 12px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={save}
+          style={{flex:1,background:C.err,color:"#fff",border:"none",borderRadius:12,padding:13,fontWeight:800,cursor:"pointer",fontSize:14}}>
+          잠금 설정
+        </button>
+        <button onClick={onClose}
+          style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"13px 16px",cursor:"pointer",color:C.mid,fontSize:13}}>
+          취소
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  타임 그리드
+// ─────────────────────────────────────────────
+function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelRes, onDelLock }) {
+  const [sel1, setSel1] = useState(null);
+  const [sel2, setSel2] = useState(null);
+  const [sheet, setSheet] = useState(null); // null | "book" | "lock"
+  const [done,  setDone]  = useState(null); // completed booking
+
+  const clearSel = () => { setSel1(null); setSel2(null); };
+
+  const handleClick = useCallback((slot) => {
+    const locked = slotLock(locks, studio.id, date, slot);
+    const cnt    = slotBooked(res, studio.id, slot);
+    if (locked && !isAdmin) return;
+    if (cnt >= studio.seats && !isAdmin) return;
+
+    if (!sel1)         { setSel1(slot); setSel2(slot); }
+    else if (slot < sel1) { setSel1(slot); setSel2(slot); }
+    else                { setSel2(slot); }
+  }, [sel1, locks, res, studio, date, isAdmin]);
+
+  const inRange = s => sel1 && sel2 && s >= sel1 && s <= sel2;
+
+  return (
+    <div>
+      {/* 선택 표시 바 */}
+      {sel1 && (
+        <div style={{background:studio.bg,border:`1.5px solid ${studio.color}44`,borderRadius:12,padding:"11px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:13,fontWeight:700,color:studio.color}}>{sel1} ~ {add30(sel2)} 선택</span>
+          <button onClick={()=>setSheet("book")}
+            style={{background:studio.color,color:"#fff",border:"none",borderRadius:9,padding:"7px 18px",fontWeight:800,cursor:"pointer",fontSize:13}}>
+            예약하기
+          </button>
+          <button onClick={clearSel}
+            style={{background:"none",border:`1px solid ${studio.color}66`,borderRadius:9,padding:"7px 12px",cursor:"pointer",color:studio.color,fontSize:12}}>
+            취소
+          </button>
+        </div>
+      )}
+
+      {!sel1 && (
+        <div style={{fontSize:11,color:C.light,marginBottom:10,padding:"4px 0"}}>
+          ☝️ 원하는 시간 슬롯을 터치해 선택하세요
+        </div>
+      )}
+
+      {isAdmin && (
+        <button onClick={()=>setSheet("lock")}
+          style={{width:"100%",background:"#FEF2F2",border:`1px solid ${C.err}44`,borderRadius:10,padding:"9px",color:C.err,fontWeight:700,cursor:"pointer",fontSize:12,marginBottom:12}}>
+          🔒 강의 잠금 추가
+        </button>
+      )}
+
+      {/* 슬롯 목록 */}
+      <div style={{display:"flex",flexDirection:"column",gap:2}}>
+        {SLOTS.map(slot => {
+          const lockReason = slotLock(locks, studio.id, date, slot);
+          const cnt  = slotBooked(res, studio.id, slot);
+          const ss   = slotStyle(cnt, studio.seats, lockReason);
+          const sel  = inRange(slot);
+          const slotRes   = isAdmin ? res.filter(r=>r.studio_id===studio.id&&r.start_time<=slot&&r.end_time>slot) : [];
+          const slotLocks = isAdmin ? locks.filter(l=>(l.studio_id===studio.id||l.studio_id==="ALL")&&l.start_time<=slot&&l.end_time>slot) : [];
+
+          return (
+            <div key={slot}>
+              <div onClick={()=>handleClick(slot)} style={{
+                display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderRadius:9,
+                background: sel ? studio.color : ss.bg,
+                border: `1.5px solid ${sel ? studio.color : lockReason ? "#E2E8F0" : ss.tc+"44"}`,
+                cursor: (lockReason && !isAdmin) ? "not-allowed" : "pointer",
+                transition:"all .1s",
+                userSelect:"none",
+              }}>
+                <span style={{fontSize:12,fontWeight:600,color:sel?"#fff9":C.light,width:40,flexShrink:0}}>{slot}</span>
+                <div style={{flex:1,height:5,background:sel?"#fff4":C.border,borderRadius:99,overflow:"hidden"}}>
+                  <div style={{height:"100%",
+                    width: lockReason ? "100%" : `${Math.min((cnt/studio.seats)*100,100)}%`,
+                    background: sel?"#fff":lockReason?"#C8D0E0":ss.tc,
+                    borderRadius:99,transition:"width .3s"}}/>
+                </div>
+                <span style={{fontSize:11,fontWeight:700,color:sel?"#fff":ss.tc,width:32,textAlign:"right",flexShrink:0}}>
+                  {ss.label}
+                </span>
+              </div>
+
+              {/* 관리자: 예약자 */}
+              {isAdmin && slotRes.length>0 && (
+                <div style={{paddingLeft:52,display:"flex",gap:4,flexWrap:"wrap",marginTop:2,marginBottom:2}}>
+                  {slotRes.filter((r,i,a)=>a.findIndex(x=>x.id===r.id)===i).map(r=>(
+                    <span key={r.id} style={{display:"inline-flex",alignItems:"center",gap:4,background:studio.bg,borderRadius:6,padding:"2px 8px",fontSize:11,color:studio.color}}>
+                      {r.user_name}({r.user_class})
+                      <button onClick={e=>{e.stopPropagation();onDelRes(r.id);}}
+                        style={{background:"none",border:"none",cursor:"pointer",color:C.err,fontSize:14,padding:0,lineHeight:1,marginLeft:2}}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* 관리자: 수동 잠금 */}
+              {isAdmin && slotLocks.length>0 && !fixedLock(studio.id,date,slot) && (
+                <div style={{paddingLeft:52,display:"flex",gap:4,flexWrap:"wrap",marginTop:2,marginBottom:2}}>
+                  {slotLocks.filter((l,i,a)=>a.findIndex(x=>x.id===l.id)===i).map(l=>(
+                    <span key={l.id} style={{display:"inline-flex",alignItems:"center",gap:4,background:"#FEE2E2",borderRadius:6,padding:"2px 8px",fontSize:11,color:C.err}}>
+                      🔒{l.reason}
+                      <button onClick={e=>{e.stopPropagation();onDelLock(l.id);}}
+                        style={{background:"none",border:"none",cursor:"pointer",color:C.err,fontSize:14,padding:0,lineHeight:1,marginLeft:2}}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 시트 모달들 */}
+      {sheet==="book" && sel1 && sel2 && (
+        <BookSheet studio={studio} date={date} s1={sel1} s2={sel2}
+          onClose={()=>{setSheet(null);clearSel();}}
+          onConfirm={p=>{ onBook(p); setDone(p); setSheet(null); clearSel(); }}/>
+      )}
+      {sheet==="lock" && (
+        <LockSheet date={date}
+          onClose={()=>setSheet(null)}
+          onConfirm={p=>{ onAddLock(p); setSheet(null); }}/>
+      )}
+      {done && (
+        <DoneSheet booking={done} studio={studio}
+          onClose={()=>setDone(null)}/>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  내 예약 탭
+// ─────────────────────────────────────────────
+function CancelSheet({ booking, studio, onClose, onConfirm }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const tryCancel = () => {
+    if (pw === booking.user_pw) { onConfirm(booking.id); onClose(); }
+    else { setErr("비밀번호가 틀렸어요"); setPw(""); }
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>예약 취소</div>
+      <div style={{background:studio.bg,borderRadius:12,padding:14,marginBottom:18,fontSize:13,color:C.mid,lineHeight:1.9}}>
+        <b style={{color:studio.color}}>{studio.name}</b><br/>
+        {fmt(booking.date)} ({DAY[dow(booking.date)]}) &nbsp; <b>{booking.start_time} ~ {booking.end_time}</b><br/>
+        {booking.user_name} ({booking.user_class})
+      </div>
+      {err && <div style={{background:"#FEF2F2",borderRadius:10,padding:"9px 14px",fontSize:12,color:C.err,marginBottom:12}}>{err}</div>}
+      <div style={{marginBottom:20}}>
+        <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>예약 비밀번호 (4자리)</label>
+        <input type="password" inputMode="numeric" maxLength={4} value={pw}
+          onChange={e=>setPw(e.target.value.replace(/\D/g,"").slice(0,4))}
+          onKeyDown={e=>e.key==="Enter"&&tryCancel()}
+          placeholder="예약 시 입력한 비밀번호" autoFocus
+          style={{width:"100%",padding:"13px 14px",borderRadius:11,
+            border:`1.5px solid ${err?C.err:C.border}`,fontSize:16,
+            outline:"none",boxSizing:"border-box",letterSpacing:8}}/>
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={tryCancel}
+          style={{flex:1,background:C.err,color:"#fff",border:"none",borderRadius:12,padding:13,fontWeight:800,cursor:"pointer",fontSize:15}}>
+          예약 취소 확인
+        </button>
+        <button onClick={onClose}
+          style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"13px 16px",cursor:"pointer",color:C.mid,fontSize:13}}>
+          돌아가기
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+function MyTab({ allRes, onCancel }) {
+  const [name,     setName]     = useState("");
+  const [searched, setSearched] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState(null);
+
+  const todayStr = today();
+  const myList = useMemo(()=>{
+    if (!searched || !name.trim()) return [];
+    return allRes.filter(r=>r.user_name===name.trim()&&r.date>=todayStr)
+                 .sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.start_time.localeCompare(b.start_time));
+  }, [allRes, name, searched, todayStr]);
+
+  const search = () => { if(name.trim()) setSearched(true); };
+
+  return (
+    <div>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>내 예약 조회</div>
+      <div style={{fontSize:12,color:C.mid,marginBottom:18}}>이름으로 예약 내역을 확인하고 취소할 수 있어요</div>
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        <input value={name} onChange={e=>{setName(e.target.value);setSearched(false);}}
+          onKeyDown={e=>e.key==="Enter"&&search()}
+          placeholder="예약자 이름 입력"
+          style={{flex:1,padding:"12px 14px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:15,outline:"none"}}/>
+        <button onClick={search}
+          style={{background:C.blue,color:"#fff",border:"none",borderRadius:10,padding:"12px 20px",fontWeight:700,cursor:"pointer",fontSize:14}}>
+          조회
+        </button>
+      </div>
+
+      {searched && (
+        myList.length===0 ? (
+          <div style={{textAlign:"center",padding:"40px 0",color:C.light}}>
+            <div style={{fontSize:36,marginBottom:8}}>📭</div>
+            <div style={{fontSize:14}}>"{name}" 이름으로 예약된 내역이 없어요</div>
+          </div>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {myList.map(r=>{
+              const st=STUDIOS.find(s=>s.id===r.studio_id)||STUDIOS[0];
+              return (
+                <div key={r.id} style={{background:st.bg,borderRadius:13,padding:16,border:`1.5px solid ${st.color}33`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:800,fontSize:14,color:st.color}}>{st.name}</div>
+                      <div style={{fontSize:13,color:C.mid,marginTop:2}}>
+                        {fmt(r.date)} ({DAY[dow(r.date)]}) &nbsp; <b>{r.start_time} ~ {r.end_time}</b>
+                      </div>
+                      <div style={{fontSize:11,color:C.light,marginTop:2}}>{r.user_class}</div>
+                    </div>
+                    <button onClick={()=>setCancelTarget(r)}
+                      style={{background:"#FEE2E2",color:C.err,border:"none",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontWeight:700,fontSize:12,flexShrink:0}}>
+                      취소
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {cancelTarget && (
+        <CancelSheet
+          booking={cancelTarget}
+          studio={STUDIOS.find(s=>s.id===cancelTarget.studio_id)||STUDIOS[0]}
+          onClose={()=>setCancelTarget(null)}
+          onConfirm={(id)=>{ onCancel(id); setCancelTarget(null); setSearched(false); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  메인 앱
+// ─────────────────────────────────────────────
+export default function App() {
+  // ── 핵심 상태 (단일 진실 소스) ───────────────
+  const [res,   setRes]   = useState([]);   // 전체 예약 배열
+  const [locks, setLocks] = useState([]);   // 전체 잠금 배열
+
+  // ── UI 상태 ───────────────────────────────
+  const [tab,   setTab]   = useState("book");
+  const [admin, setAdmin] = useState(false);
+  const [pw,    setPw]    = useState("");
+  const [pwErr, setPwErr] = useState(false);
+  const [date,  setDate]  = useState(today());
+  const [sid,   setSid]   = useState("B");
+  const [loading,setLoading] = useState(false);
+  const [online, setOnline]  = useState(false); // Supabase 연결 여부
+
+  const week    = useMemo(()=>getDates(),[]);
+  const studio  = STUDIOS.find(s=>s.id===sid)||STUDIOS[1];
+
+  // ── Supabase에서 해당 날짜 데이터 로드 ──────
+  const loadDate = useCallback(async (d) => {
+    setLoading(true);
+    const [rData, lData] = await Promise.all([
+      sbFetch(`studio_reservations?date=eq.${d}&order=start_time.asc`),
+      sbFetch(`studio_locks?date=eq.${d}`),
+    ]);
+    if (rData !== null) {
+      // Supabase 성공: 해당 날짜 데이터 교체
+      setRes(prev => [...prev.filter(r=>r.date!==d), ...rData]);
+      setLocks(prev => [...prev.filter(l=>l.date!==d), ...(lData||[])]);
+      setOnline(true);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(()=>{ loadDate(date); }, [date]);
+
+  // ── 예약 추가 (즉시 state 반영 + 백그라운드 저장) ─
+  const onBook = useCallback(payload => {
+    setRes(prev => [...prev, payload]);        // 즉시 UI 반영
+    sbInsert("studio_reservations", payload);  // 백그라운드 저장
+  }, []);
+
+  // ── 예약 취소 ─────────────────────────────
+  const onCancel = useCallback(id => {
+    setRes(prev => prev.filter(r=>r.id!==id));
+    sbDelete("studio_reservations", `id=eq.${id}`);
+  }, []);
+
+  // ── 잠금 추가 ─────────────────────────────
+  const onAddLock = useCallback(payload => {
+    setLocks(prev => [...prev, payload]);
+    sbInsert("studio_locks", payload);
+  }, []);
+
+  // ── 잠금 해제 ─────────────────────────────
+  const onDelLock = useCallback(id => {
+    setLocks(prev => prev.filter(l=>l.id!==id));
+    sbDelete("studio_locks", `id=eq.${id}`);
+  }, []);
+
+  // ── 날짜별 res/locks 필터 ─────────────────
+  const dateRes   = useMemo(()=>res.filter(r=>r.date===date),   [res,   date]);
+  const dateLocks = useMemo(()=>locks.filter(l=>l.date===date), [locks, date]);
+
+  // ── 스튜디오 카드 상태 ─────────────────────
+  const studioStat = s => {
+    const allLocked = SLOTS.every(slot=>slotLock(dateLocks,s.id,date,slot));
+    if(allLocked) return "locked";
+    const minRem = SLOTS.reduce((mn,slot)=>{
+      if(slotLock(dateLocks,s.id,date,slot)) return mn;
+      return Math.min(mn, s.seats-slotBooked(dateRes,s.id,slot));
+    }, s.seats);
+    return minRem<=0?"full":minRem<=2?"low":"ok";
+  };
+
+  const loginAdmin = () => {
+    if(pw===ADMIN_PW){ setAdmin(true); setPwErr(false); setPw(""); }
+    else setPwErr(true);
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Noto Sans KR',sans-serif",maxWidth:520,margin:"0 auto"}}>
+
+      {/* 헤더 */}
+      <header style={{background:C.navy,padding:"12px 16px",position:"sticky",top:0,zIndex:100,borderBottom:`2px solid ${C.accent}44`}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:30,height:30,borderRadius:8,background:C.accent,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>🏛</div>
+          <div style={{flex:1}}>
+            <div style={{color:"#fff",fontWeight:900,fontSize:15,lineHeight:1.1}}>신전스퀘어</div>
+            <div style={{color:C.accent,fontSize:8,letterSpacing:1.5}}>STUDIO RESERVATION</div>
+          </div>
+          {online && <Tag c={C.ok}>DB 연결됨</Tag>}
+          {admin  && <Tag c={C.accent}>관리자</Tag>}
+          {admin  && <button onClick={()=>setAdmin(false)}
+            style={{background:"transparent",border:`1px solid #344060`,borderRadius:7,color:"#a0b0cc",padding:"4px 9px",cursor:"pointer",fontSize:11}}>
+            로그아웃
+          </button>}
+        </div>
+      </header>
+
+      {/* 탭 */}
+      <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,position:"sticky",top:54,zIndex:99}}>
+        <div style={{display:"flex"}}>
+          {[["book","📅 예약"],["mine","🗒 내 예약"],["admin",admin?"⚙️ 관리":"🔒 관리"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)} style={{
+              flex:1,padding:"13px 4px",border:"none",background:"none",cursor:"pointer",
+              fontWeight:tab===k?800:400,fontSize:13,
+              color:tab===k?C.blue:C.light,
+              borderBottom:`2.5px solid ${tab===k?C.blue:"transparent"}`,transition:"all .15s"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <main style={{padding:"16px 14px"}}>
+
+        {/* ─── 예약 탭 ─── */}
+        {tab==="book" && (<>
+
+          {/* 날짜 선택 */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:8,letterSpacing:.5}}>날짜</div>
+            <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:4}}>
+              {week.map(d=>{
+                const open=isOpen(d), isToday=d===today(), sel=d===date;
+                return (
+                  <button key={d} onClick={()=>open&&setDate(d)} disabled={!open} style={{
+                    flexShrink:0,padding:"9px 12px",borderRadius:11,textAlign:"center",
+                    border:`2px solid ${sel?C.blue:open?C.border:"#E8ECF4"}`,
+                    background:sel?C.blue:open?C.card:"#F6F8FC",
+                    cursor:open?"pointer":"not-allowed",minWidth:52}}>
+                    <div style={{fontSize:10,color:sel?"#fff":isToday?C.blue:C.light,fontWeight:700}}>{isToday?"오늘":DAY[dow(d)]}</div>
+                    <div style={{fontSize:18,fontWeight:900,color:sel?"#fff":open?C.tx:"#C0CAD8",marginTop:1}}>{parseInt(d.split("-")[2])}</div>
+                    {!open&&<div style={{fontSize:8,color:C.light}}>미오픈</div>}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{fontSize:10,color:C.light,marginTop:6}}>💡 전날 오전 9시에 예약 오픈</div>
+          </div>
+
+          {/* 스튜디오 카드 */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:8,letterSpacing:.5}}>스튜디오 선택</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+              {STUDIOS.map(s=>{
+                const st=studioStat(s), sel=s.id===sid;
+                const stC=st==="locked"?"#B0BAD0":st==="full"?C.err:st==="low"?C.warn:C.ok;
+                const booked_pct = SLOTS.reduce((mx,slot)=>Math.max(mx,slotBooked(dateRes,s.id,slot)/s.seats),0);
+                return (
+                  <button key={s.id} onClick={()=>setSid(s.id)} style={{
+                    background:sel?s.color:s.bg,borderRadius:13,padding:"13px 14px",
+                    border:`2px solid ${sel?s.color:s.color+"33"}`,cursor:"pointer",textAlign:"left"}}>
+                    <div style={{fontWeight:900,fontSize:14,color:sel?"#fff":s.color}}>{s.name}</div>
+                    <div style={{fontSize:10,color:sel?"#fff8":C.light,marginTop:2}}>{s.seats}석</div>
+                    <div style={{marginTop:8,background:sel?"#fff4":C.border,borderRadius:99,height:4}}>
+                      <div style={{width:st==="locked"?"100%":`${booked_pct*100}%`,
+                        height:"100%",background:sel?"#fff":stC,borderRadius:99}}/>
+                    </div>
+                    <div style={{marginTop:4,fontSize:10,fontWeight:700,color:sel?"#fff":stC}}>
+                      {st==="locked"?"🔒 이용불가":st==="full"?"마감":st==="low"?"잔여 적음":"이용 가능"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 타임 그리드 */}
+          <div style={{background:C.card,borderRadius:16,padding:16,border:`1px solid ${C.border}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+              <div style={{width:9,height:9,borderRadius:"50%",background:studio.color,flexShrink:0}}/>
+              <b style={{fontSize:14,color:C.tx}}>{studio.name}</b>
+              <span style={{fontSize:11,color:C.light}}>{studio.seats}석</span>
+              {loading && <span style={{fontSize:10,color:C.light,marginLeft:"auto"}}>로딩 중…</span>}
+              <button onClick={()=>loadDate(date)} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"3px 9px",cursor:"pointer",fontSize:10,color:C.mid}}>새로고침</button>
+            </div>
+            <div style={{display:"flex",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+              {[["#ECFDF5",C.ok,"여유"],["#FEF3C7",C.warn,"잔여 적음"],["#FEE2E2",C.err,"마감"],["#F1F3F9","#A8B4CC","강의/잠금"]].map(([bg,c,l])=>(
+                <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
+                  <div style={{width:8,height:8,borderRadius:2,background:bg,border:`1px solid ${c}44`}}/>
+                  <span style={{fontSize:10,color:C.light}}>{l}</span>
+                </div>
+              ))}
+            </div>
+            <TimeGrid
+              studio={studio} date={date}
+              res={dateRes} locks={dateLocks}
+              isAdmin={admin}
+              onBook={onBook}
+              onAddLock={onAddLock}
+              onDelRes={onCancel}
+              onDelLock={onDelLock}
+            />
+          </div>
+
+          {/* 공지 */}
+          <div style={{background:"#FFF8E8",borderRadius:13,padding:14,border:`1px solid ${C.accent}44`,marginTop:14}}>
+            <div style={{fontSize:12,fontWeight:800,color:C.navy,marginBottom:6}}>📋 이용 안내</div>
+            <div style={{fontSize:11,color:C.mid,lineHeight:2}}>
+              🏢 서울시 송파구 석촌동 288-19 신공간빌딩 · 🔑 5555*<br/>
+              🚗 차량불가 · 🍱 취식자제 · 🧹 이용 후 자리 정리<br/>
+              ⚠️ 노쇼 3회 시 패널티<br/>
+              💡 마지막 퇴실자: 소등 + 에어컨OFF + 문잠금
+            </div>
+          </div>
+        </>)}
+
+        {/* ─── 내 예약 탭 ─── */}
+        {tab==="mine" && <MyTab allRes={res} onCancel={onCancel}/>}
+
+        {/* ─── 관리자 탭 ─── */}
+        {tab==="admin" && (admin ? (
+          <div>
+            <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>관리자 모드</div>
+            <div style={{fontSize:12,color:C.mid,marginBottom:16}}>날짜 선택 후 예약 현황을 확인하세요</div>
+
+            {/* 날짜 선택 */}
+            <div style={{display:"flex",gap:7,overflowX:"auto",marginBottom:18,paddingBottom:4}}>
+              {getDates().map(d=>(
+                <button key={d} onClick={()=>setDate(d)} style={{
+                  flexShrink:0,padding:"8px 13px",borderRadius:9,
+                  border:`2px solid ${d===date?C.blue:C.border}`,
+                  background:d===date?C.blue:C.card,cursor:"pointer",
+                  color:d===date?"#fff":C.mid,fontWeight:700,fontSize:12}}>
+                  {fmt(d)} ({DAY[dow(d)]})
+                </button>
+              ))}
+            </div>
+
+            {/* 스튜디오별 현황 */}
+            {STUDIOS.map(s=>{
+              const sRes   = dateRes.filter(r=>r.studio_id===s.id);
+              const sLocks = dateLocks.filter(l=>l.studio_id===s.id||l.studio_id==="ALL");
+              const fixCount = SLOTS.filter(slot=>fixedLock(s.id,date,slot)).length;
+              return (
+                <div key={s.id} style={{background:C.card,borderRadius:14,padding:16,marginBottom:12,border:`1.5px solid ${s.color}33`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                    <div style={{width:9,height:9,borderRadius:"50%",background:s.color}}/>
+                    <b style={{color:s.color,fontSize:13}}>{s.name}</b>
+                    {sRes.length>0   && <Tag c={s.color}>{sRes.length}건 예약</Tag>}
+                    {sLocks.length>0 && <Tag c={C.err}>수동 {sLocks.length}건 잠금</Tag>}
+                    {fixCount===SLOTS.length && <Tag c="#B0BAD0">🔒 전일 잠금</Tag>}
+                  </div>
+                  {sRes.length===0 && sLocks.length===0 && fixCount<SLOTS.length && (
+                    <div style={{fontSize:12,color:C.light}}>예약 없음</div>
+                  )}
+                  {sRes.map(r=>(
+                    <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,background:s.bg,borderRadius:8,padding:"8px 12px",marginBottom:5}}>
+                      <span style={{fontSize:11,fontWeight:700,color:s.color,width:88}}>{r.start_time}~{r.end_time}</span>
+                      <span style={{flex:1,fontSize:13,color:C.tx,fontWeight:600}}>{r.user_name} <span style={{fontSize:11,color:C.light}}>({r.user_class})</span></span>
+                      <button onClick={()=>onCancel(r.id)}
+                        style={{background:"#FEE2E2",color:C.err,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontWeight:700,fontSize:11}}>취소</button>
+                    </div>
+                  ))}
+                  {sLocks.map(l=>(
+                    <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,background:"#FEE2E2",borderRadius:8,padding:"8px 12px",marginBottom:5}}>
+                      <span style={{fontSize:11,fontWeight:700,color:C.err,width:88}}>{l.start_time}~{l.end_time}</span>
+                      <span style={{flex:1,fontSize:12,color:C.err}}>🔒 {l.reason}</span>
+                      <button onClick={()=>onDelLock(l.id)}
+                        style={{background:C.err,color:"#fff",border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontWeight:700,fontSize:11}}>해제</button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{maxWidth:360,margin:"0 auto",paddingTop:20}}>
+            <div style={{textAlign:"center",marginBottom:24}}>
+              <div style={{fontSize:44,marginBottom:10}}>🔒</div>
+              <div style={{fontSize:18,fontWeight:900,color:C.navy}}>관리자 로그인</div>
+            </div>
+            <input type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&loginAdmin()}
+              placeholder="비밀번호" autoFocus
+              style={{width:"100%",padding:"13px 16px",borderRadius:12,
+                border:`2px solid ${pwErr?C.err:C.border}`,fontSize:15,outline:"none",
+                boxSizing:"border-box",marginBottom:8,background:pwErr?"#FEF2F2":"#fff"}}/>
+            {pwErr && <div style={{fontSize:12,color:C.err,marginBottom:10}}>❌ 틀렸습니다</div>}
+            <button onClick={loginAdmin}
+              style={{width:"100%",background:C.navy,color:"#fff",border:"none",borderRadius:12,padding:14,fontWeight:800,cursor:"pointer",fontSize:15}}>
+              로그인
+            </button>
+          </div>
+        ))}
+
+      </main>
+    </div>
+  );
+}
