@@ -583,6 +583,77 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
 // ─────────────────────────────────────────────
 //  내 예약 탭
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+//  일괄 취소 확인 시트
+// ─────────────────────────────────────────────
+function BulkCancelSheet({ bookings, studioSettings, onClose, onConfirm }) {
+  const [pws,  setPws]  = useState({}); // {id: pw}
+  const [errs, setErrs] = useState({});
+  const [done, setDone] = useState(false);
+
+  const tryAll = () => {
+    const newErrs = {};
+    const toCancel = [];
+    bookings.forEach(b => {
+      const pw = pws[b.id] || "";
+      if (pw === b.user_pw) toCancel.push(b.id);
+      else newErrs[b.id] = "❌ 틀림";
+    });
+    if (Object.keys(newErrs).length > 0) { setErrs(newErrs); return; }
+    onConfirm(toCancel);
+    setDone(true);
+    setTimeout(onClose, 1200);
+  };
+
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>일괄 취소</div>
+      <div style={{fontSize:12,color:C.mid,marginBottom:16}}>{bookings.length}건 예약을 취소해요. 각 예약의 비밀번호를 입력하세요.</div>
+      {done ? (
+        <div style={{textAlign:"center",padding:"20px 0"}}>
+          <div style={{fontSize:40,marginBottom:8}}>✅</div>
+          <div style={{fontSize:15,fontWeight:700,color:C.ok}}>취소 완료!</div>
+        </div>
+      ) : (
+        <>
+          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20,maxHeight:320,overflowY:"auto"}}>
+            {bookings.map(b=>{
+              const st=studioSettings.find(s=>s.id===b.studio_id)||studioSettings[0];
+              return (
+                <div key={b.id} style={{background:st.bg,borderRadius:11,padding:12,border:`1px solid ${st.color}33`}}>
+                  <div style={{fontSize:12,fontWeight:700,color:st.color,marginBottom:6}}>
+                    {st.name} · {fmt(b.date)}({DAY[dow(b.date)]}) {b.start_time}~{b.end_time}
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <input type="password" inputMode="numeric" maxLength={4}
+                      value={pws[b.id]||""}
+                      onChange={e=>{setPws(p=>({...p,[b.id]:e.target.value.replace(/\D/g,"").slice(0,4)}));setErrs(p=>({...p,[b.id]:""}));}}
+                      placeholder="비밀번호 4자리"
+                      style={{flex:1,padding:"9px 12px",borderRadius:9,
+                        border:`1.5px solid ${errs[b.id]?C.err:C.border}`,
+                        fontSize:14,outline:"none",letterSpacing:6}}/>
+                    {errs[b.id]&&<span style={{fontSize:11,color:C.err}}>{errs[b.id]}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={tryAll}
+              style={{flex:1,background:C.err,color:"#fff",border:"none",borderRadius:12,padding:13,fontWeight:800,cursor:"pointer",fontSize:14}}>
+              {bookings.length}건 모두 취소
+            </button>
+            <button onClick={onClose}
+              style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"13px 16px",cursor:"pointer",color:C.mid,fontSize:13}}>
+              돌아가기
+            </button>
+          </div>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
 function CancelSheet({ booking, studio, onClose, onConfirm }) {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -623,10 +694,12 @@ function CancelSheet({ booking, studio, onClose, onConfirm }) {
   );
 }
 
-function MyTab({ allRes, onCancel }) {
-  const [name,     setName]     = useState("");
-  const [searched, setSearched] = useState(false);
+function MyTab({ allRes, onCancel, studioSettings }) {
+  const [name,       setName]       = useState("");
+  const [searched,   setSearched]   = useState(false);
+  const [selected,   setSelected]   = useState(new Set());
   const [cancelTarget, setCancelTarget] = useState(null);
+  const [bulkCancel,   setBulkCancel]   = useState(false);
 
   const todayStr = today();
   const myList = useMemo(()=>{
@@ -635,14 +708,17 @@ function MyTab({ allRes, onCancel }) {
                  .sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.start_time.localeCompare(b.start_time));
   }, [allRes, name, searched, todayStr]);
 
-  const search = () => { if(name.trim()) setSearched(true); };
+  const search  = () => { if(name.trim()){ setSearched(true); setSelected(new Set()); } };
+  const toggleSel = id => setSelected(prev=>{ const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+  const toggleAll = () => setSelected(prev => prev.size===myList.length&&myList.length>0 ? new Set() : new Set(myList.map(r=>r.id)));
+  const selList = myList.filter(r=>selected.has(r.id));
 
   return (
     <div>
       <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>내 예약 조회</div>
       <div style={{fontSize:12,color:C.mid,marginBottom:18}}>이름으로 예약 내역을 확인하고 취소할 수 있어요</div>
       <div style={{display:"flex",gap:8,marginBottom:20}}>
-        <input value={name} onChange={e=>{setName(e.target.value);setSearched(false);}}
+        <input value={name} onChange={e=>{setName(e.target.value);setSearched(false);setSelected(new Set());}}
           onKeyDown={e=>e.key==="Enter"&&search()}
           placeholder="예약자 이름 입력"
           style={{flex:1,padding:"12px 14px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:15,outline:"none"}}/>
@@ -659,42 +735,77 @@ function MyTab({ allRes, onCancel }) {
             <div style={{fontSize:14}}>"{name}" 이름으로 예약된 내역이 없어요</div>
           </div>
         ) : (
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {myList.map(r=>{
-              const st=STUDIOS.find(s=>s.id===r.studio_id)||STUDIOS[0];
-              return (
-                <div key={r.id} style={{background:st.bg,borderRadius:13,padding:16,border:`1.5px solid ${st.color}33`}}>
-                  <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    <div style={{flex:1}}>
+          <>
+            {/* 전체선택 + 일괄취소 바 */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,padding:"10px 14px",
+              background:C.bg,borderRadius:10,border:`1px solid ${C.border}`}}>
+              <input type="checkbox"
+                checked={selected.size===myList.length&&myList.length>0}
+                onChange={toggleAll}
+                style={{width:16,height:16,cursor:"pointer",accentColor:C.blue}}/>
+              <span style={{fontSize:13,color:C.mid,flex:1}}>전체 선택 ({myList.length}건)</span>
+              {selected.size>0&&(
+                <button onClick={()=>setBulkCancel(true)}
+                  style={{background:C.err,color:"#fff",border:"none",borderRadius:8,
+                    padding:"7px 14px",fontWeight:700,cursor:"pointer",fontSize:12}}>
+                  선택 {selected.size}건 취소
+                </button>
+              )}
+            </div>
+
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {myList.map(r=>{
+                const st=studioSettings.find(s=>s.id===r.studio_id)||studioSettings[0];
+                const isSel=selected.has(r.id);
+                return (
+                  <div key={r.id}
+                    style={{background:isSel?st.color+"18":st.bg,borderRadius:13,padding:14,
+                      border:`1.5px solid ${isSel?st.color:st.color+"33"}`,
+                      display:"flex",alignItems:"center",gap:12,transition:"all .1s",cursor:"pointer"}}
+                    onClick={()=>toggleSel(r.id)}>
+                    <input type="checkbox" checked={isSel} onChange={()=>toggleSel(r.id)}
+                      onClick={e=>e.stopPropagation()}
+                      style={{width:16,height:16,cursor:"pointer",accentColor:st.color,flexShrink:0}}/>
+                    <div style={{flex:1}} onClick={e=>e.stopPropagation()}>
                       <div style={{fontWeight:800,fontSize:14,color:st.color}}>{st.name}</div>
                       <div style={{fontSize:13,color:C.mid,marginTop:2}}>
-                        {fmt(r.date)} ({DAY[dow(r.date)]}) &nbsp; <b>{r.start_time} ~ {r.end_time}</b>
+                        {fmt(r.date)} ({DAY[dow(r.date)]}) · <b>{r.start_time} ~ {r.end_time}</b>
                       </div>
                       <div style={{fontSize:11,color:C.light,marginTop:2}}>{r.user_class}</div>
                     </div>
-                    <button onClick={()=>setCancelTarget(r)}
-                      style={{background:"#FEE2E2",color:C.err,border:"none",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontWeight:700,fontSize:12,flexShrink:0}}>
+                    <button onClick={e=>{e.stopPropagation();setCancelTarget(r);}}
+                      style={{background:"#FEE2E2",color:C.err,border:"none",borderRadius:8,
+                        padding:"7px 10px",cursor:"pointer",fontWeight:700,fontSize:11,flexShrink:0}}>
                       취소
                     </button>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         )
       )}
 
       {cancelTarget && (
         <CancelSheet
           booking={cancelTarget}
-          studio={STUDIOS.find(s=>s.id===cancelTarget.studio_id)||STUDIOS[0]}
+          studio={studioSettings.find(s=>s.id===cancelTarget.studio_id)||studioSettings[0]}
           onClose={()=>setCancelTarget(null)}
-          onConfirm={(id)=>{ onCancel(id); setCancelTarget(null); setSearched(false); }}
+          onConfirm={id=>{ onCancel(id); setCancelTarget(null); setSearched(false); setSelected(new Set()); }}
+        />
+      )}
+      {bulkCancel && selList.length>0 && (
+        <BulkCancelSheet
+          bookings={selList}
+          studioSettings={studioSettings}
+          onClose={()=>setBulkCancel(false)}
+          onConfirm={ids=>{ ids.forEach(id=>onCancel(id)); setBulkCancel(false); setSelected(new Set()); }}
         />
       )}
     </div>
   );
 }
+
 
 // ─────────────────────────────────────────────
 //  메인 앱
@@ -942,7 +1053,7 @@ export default function App() {
         </>)}
 
         {/* ─── 내 예약 탭 ─── */}
-        {tab==="mine" && <MyTab allRes={res} onCancel={onCancel}/>}
+        {tab==="mine" && <MyTab allRes={res} onCancel={onCancel} studioSettings={studioSettings}/>}
 
         {showStudioEdit && (
         <StudioEditSheet
