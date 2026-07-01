@@ -270,6 +270,7 @@ function ChangePwSheet({ currentPw, onClose, onChanged }) {
         body: JSON.stringify({ key: "booking_admin_pw", value: next }),
       });
     } catch {}
+    try { localStorage.setItem("sj_booking_admin_pw", next); } catch {}
     onChanged(next);
     setDone(true);
     setTimeout(onClose, 1500);
@@ -325,6 +326,9 @@ function StudioEditSheet({ studios, onClose, onSave }) {
   const save = async () => {
     setSaving(true);
     const payload = studios.map((s,i)=>({ id:s.id, name:names[i], seats:parseInt(seats[i])||s.seats }));
+    // 1) localStorage에 즉시 저장 (새로고침해도 유지)
+    try { localStorage.setItem("sj_studio_settings", JSON.stringify(payload)); } catch {}
+    // 2) Supabase에 저장 (다른 기기와 동기화)
     try {
       await fetch(`${SB}/rest/v1/settings`, {
         method:"POST",
@@ -829,30 +833,52 @@ export default function App() {
   const [loading,setLoading] = useState(false);
   const [online, setOnline]  = useState(false); // Supabase 연결 여부
 
-  // 스튜디오 설정 로드
+  // 스튜디오 설정 로드: Supabase → localStorage → 기본값
   useEffect(()=>{
+    const applySettings = (saved) => {
+      if (!saved?.length) return;
+      setStudioSettings(STUDIOS.map(s=>{
+        const found = saved.find(x=>x.id===s.id);
+        return found ? {...s, name:found.name, seats:Number(found.seats)||s.seats} : s;
+      }));
+    };
+    // 1) localStorage 먼저 (빠름)
+    try {
+      const local = localStorage.getItem("sj_studio_settings");
+      if (local) applySettings(JSON.parse(local));
+    } catch {}
+    // 2) Supabase에서 최신값 로드 (느리지만 정확)
     (async()=>{
       try {
         const r = await fetch(`${SB}/rest/v1/settings?key=eq.studio_settings&select=value`, { headers: H });
-        const d = await r.json();
-        if (d?.length && d[0].value) {
-          const saved = JSON.parse(d[0].value);
-          setStudioSettings(STUDIOS.map(s=>{
-            const found = saved.find(x=>x.id===s.id);
-            return found ? {...s, name:found.name, seats:found.seats} : s;
-          }));
+        if (r.ok) {
+          const d = await r.json();
+          if (d?.length && d[0].value) {
+            const saved = JSON.parse(d[0].value);
+            applySettings(saved);
+            localStorage.setItem("sj_studio_settings", JSON.stringify(saved));
+          }
         }
       } catch {}
     })();
   },[]);
 
-  // 관리자 비밀번호 Supabase에서 로드
+  // 관리자 비밀번호 로드: localStorage → Supabase
   useEffect(()=>{
+    try {
+      const local = localStorage.getItem("sj_booking_admin_pw");
+      if (local) setAdminPw(local);
+    } catch {}
     (async()=>{
       try {
         const r = await fetch(`${SB}/rest/v1/settings?key=eq.booking_admin_pw&select=value`, { headers: H });
-        const d = await r.json();
-        if (d?.length && d[0].value) setAdminPw(d[0].value);
+        if (r.ok) {
+          const d = await r.json();
+          if (d?.length && d[0].value) {
+            setAdminPw(d[0].value);
+            localStorage.setItem("sj_booking_admin_pw", d[0].value);
+          }
+        }
       } catch {}
     })();
   },[]);
