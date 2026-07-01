@@ -6,7 +6,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 const SB = "https://yigtucvlikxeddqghtqw.supabase.co";
 const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpZ3R1Y3ZsaWt4ZWRkcWdodHF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTcwNjgsImV4cCI6MjA5Nzg3MzA2OH0.MoTdu9sYMOLIaLhCNY9Ivs3hg32MbiHoqlOMcbRpIwY";
 const H  = { apikey: KEY, Authorization: `Bearer ${KEY}` };
-const ADMIN_PW = "신전2025";
+const DEFAULT_ADMIN_PW = "0000";
 
 // Supabase 요청 (실패해도 조용히)
 const sbFetch = async (path) => {
@@ -86,10 +86,13 @@ const dow    = s => new Date(s+"T12:00:00").getDay();
 const fmt    = s => { const [,m,d]=s.split("-"); return `${parseInt(m)}.${parseInt(d)}`; };
 const today  = () => toStr(new Date());
 
-// 전날 9시에 예약 오픈
+// 오전 9시 이후면 오늘~3일 뒤 전부 예약 가능 (오늘은 항상 가능)
 const isOpen = ds => {
-  const [y,mo,d]=ds.split("-").map(Number);
-  return new Date() >= new Date(y,mo-1,d-1,9,0,0);
+  const now = new Date();
+  const todayStr = toStr(now);
+  if (ds === todayStr) return true; // 오늘은 항상 열림
+  const today9 = new Date(); today9.setHours(9,0,0,0);
+  return now >= today9; // 9시 이후면 3일치 전부 열림
 };
 const getDates = () => Array.from({length:4},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return toStr(d); });
 
@@ -241,6 +244,71 @@ function DoneSheet({ booking, studio, onClose }) {
           확인
         </button>
       </div>
+    </Sheet>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  관리자 비밀번호 변경 시트
+// ─────────────────────────────────────────────
+function ChangePwSheet({ currentPw, onClose, onChanged }) {
+  const [cur,  setCur]  = useState("");
+  const [next, setNext] = useState("");
+  const [con,  setCon]  = useState("");
+  const [err,  setErr]  = useState("");
+  const [done, setDone] = useState(false);
+
+  const save = async () => {
+    if (cur !== currentPw)   { setErr("현재 비밀번호가 틀렸어요"); return; }
+    if (next.length < 4)     { setErr("새 비밀번호는 4자 이상이어야 해요"); return; }
+    if (next !== con)        { setErr("새 비밀번호가 일치하지 않아요"); return; }
+    // Supabase settings 테이블에 저장
+    try {
+      await fetch(`${SB}/rest/v1/settings`, {
+        method: "POST",
+        headers: { ...H, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+        body: JSON.stringify({ key: "booking_admin_pw", value: next }),
+      });
+    } catch {}
+    onChanged(next);
+    setDone(true);
+    setTimeout(onClose, 1500);
+  };
+
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:20}}>🔑 관리자 비밀번호 변경</div>
+      {done ? (
+        <div style={{textAlign:"center",padding:"20px 0"}}>
+          <div style={{fontSize:40,marginBottom:8}}>✅</div>
+          <div style={{fontSize:15,fontWeight:700,color:C.ok}}>비밀번호가 변경됐어요!</div>
+        </div>
+      ) : (
+        <>
+          {err && <div style={{background:"#FEF2F2",borderRadius:10,padding:"9px 14px",fontSize:12,color:C.err,marginBottom:12}}>{err}</div>}
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:20}}>
+            {[["현재 비밀번호",cur,setCur],["새 비밀번호",next,setNext],["새 비밀번호 확인",con,setCon]].map(([lbl,val,set])=>(
+              <div key={lbl}>
+                <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>{lbl}</label>
+                <input type="password" value={val} onChange={e=>set(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&save()} autoFocus={lbl==="현재 비밀번호"}
+                  style={{width:"100%",padding:"13px 14px",borderRadius:11,border:`1.5px solid ${C.border}`,
+                    fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={save}
+              style={{flex:1,background:C.navy,color:"#fff",border:"none",borderRadius:12,padding:13,fontWeight:800,cursor:"pointer",fontSize:14}}>
+              변경하기
+            </button>
+            <button onClick={onClose}
+              style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"13px 16px",cursor:"pointer",color:C.mid,fontSize:13}}>
+              취소
+            </button>
+          </div>
+        </>
+      )}
     </Sheet>
   );
 }
@@ -567,12 +635,25 @@ export default function App() {
   // ── UI 상태 ───────────────────────────────
   const [tab,   setTab]   = useState("book");
   const [admin, setAdmin] = useState(false);
-  const [pw,    setPw]    = useState("");
-  const [pwErr, setPwErr] = useState(false);
+  const [pw,       setPw]     = useState("");
+  const [pwErr,    setPwErr]  = useState(false);
+  const [adminPw,  setAdminPw] = useState(DEFAULT_ADMIN_PW);
+  const [showChgPw,setShowChgPw] = useState(false);
   const [date,  setDate]  = useState(today());
   const [sid,   setSid]   = useState("B");
   const [loading,setLoading] = useState(false);
   const [online, setOnline]  = useState(false); // Supabase 연결 여부
+
+  // 관리자 비밀번호 Supabase에서 로드
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const r = await fetch(`${SB}/rest/v1/settings?key=eq.booking_admin_pw&select=value`, { headers: H });
+        const d = await r.json();
+        if (d?.length && d[0].value) setAdminPw(d[0].value);
+      } catch {}
+    })();
+  },[]);
 
   const week    = useMemo(()=>getDates(),[]);
   const studio  = STUDIOS.find(s=>s.id===sid)||STUDIOS[1];
@@ -635,7 +716,7 @@ export default function App() {
   };
 
   const loginAdmin = () => {
-    if(pw===ADMIN_PW){ setAdmin(true); setPwErr(false); setPw(""); }
+    if(pw===adminPw){ setAdmin(true); setPwErr(false); setPw(""); }
     else setPwErr(true);
   };
 
@@ -698,7 +779,7 @@ export default function App() {
                 );
               })}
             </div>
-            <div style={{fontSize:10,color:C.light,marginTop:6}}>💡 전날 오전 9시에 예약 오픈</div>
+            <div style={{fontSize:10,color:C.light,marginTop:6}}>💡 매일 오전 9시에 3일치 예약 오픈</div>
           </div>
 
           {/* 스튜디오 카드 */}
@@ -771,10 +852,19 @@ export default function App() {
         {/* ─── 내 예약 탭 ─── */}
         {tab==="mine" && <MyTab allRes={res} onCancel={onCancel}/>}
 
-        {/* ─── 관리자 탭 ─── */}
+        {showChgPw && (
+        <ChangePwSheet currentPw={adminPw} onClose={()=>setShowChgPw(false)} onChanged={pw=>setAdminPw(pw)}/>
+      )}
+      {/* ─── 관리자 탭 ─── */}
         {tab==="admin" && (admin ? (
           <div>
-            <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>관리자 모드</div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+              <div style={{fontSize:17,fontWeight:900,color:C.navy}}>관리자 모드</div>
+              <button onClick={()=>setShowChgPw(true)}
+                style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:11,color:C.mid,fontWeight:600}}>
+                🔑 비밀번호 변경
+              </button>
+            </div>
             <div style={{fontSize:12,color:C.mid,marginBottom:16}}>날짜 선택 후 예약 현황을 확인하세요</div>
 
             {/* 날짜 선택 */}
