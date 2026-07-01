@@ -314,6 +314,78 @@ function ChangePwSheet({ currentPw, onClose, onChanged }) {
 }
 
 // ─────────────────────────────────────────────
+//  스튜디오 이름 편집 시트
+// ─────────────────────────────────────────────
+function StudioEditSheet({ studios, onClose, onSave }) {
+  const [names, setNames] = useState(studios.map(s=>s.name));
+  const [seats, setSeats] = useState(studios.map(s=>s.seats));
+  const [saving, setSaving] = useState(false);
+  const [done,   setDone]   = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    const payload = studios.map((s,i)=>({ id:s.id, name:names[i], seats:parseInt(seats[i])||s.seats }));
+    try {
+      await fetch(`${SB}/rest/v1/settings`, {
+        method:"POST",
+        headers:{...H,"Content-Type":"application/json",Prefer:"resolution=merge-duplicates"},
+        body:JSON.stringify({key:"studio_settings",value:JSON.stringify(payload)}),
+      });
+    } catch {}
+    onSave(payload);
+    setDone(true);
+    setTimeout(onClose, 1200);
+  };
+
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:20}}>🏛 스튜디오 설정</div>
+      {done ? (
+        <div style={{textAlign:"center",padding:"20px 0"}}>
+          <div style={{fontSize:40,marginBottom:8}}>✅</div>
+          <div style={{fontSize:15,fontWeight:700,color:C.ok}}>저장됐어요!</div>
+        </div>
+      ) : (
+        <>
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:20}}>
+            {studios.map((s,i)=>(
+              <div key={s.id} style={{background:s.bg,borderRadius:12,padding:14,border:`1.5px solid ${s.color}44`}}>
+                <div style={{fontSize:11,fontWeight:700,color:s.color,marginBottom:8}}>{s.id}호 설정</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8}}>
+                  <div>
+                    <label style={{fontSize:11,color:C.mid,display:"block",marginBottom:4}}>스튜디오 이름</label>
+                    <input value={names[i]} onChange={e=>{const n=[...names];n[i]=e.target.value;setNames(n);}}
+                      style={{width:"100%",padding:"9px 12px",borderRadius:9,border:`1.5px solid ${C.border}`,
+                        fontSize:14,fontWeight:700,color:s.color,outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  <div style={{minWidth:56}}>
+                    <label style={{fontSize:11,color:C.mid,display:"block",marginBottom:4}}>좌석수</label>
+                    <input type="number" min="1" max="50" value={seats[i]}
+                      onChange={e=>{const n=[...seats];n[i]=e.target.value;setSeats(n);}}
+                      style={{width:"100%",padding:"9px 10px",borderRadius:9,border:`1.5px solid ${C.border}`,
+                        fontSize:14,fontWeight:700,textAlign:"center",outline:"none"}}/>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={save} disabled={saving}
+              style={{flex:1,background:saving?C.light:C.blue,color:"#fff",border:"none",borderRadius:12,padding:13,fontWeight:800,cursor:"pointer",fontSize:14}}>
+              {saving?"저장 중…":"저장하기"}
+            </button>
+            <button onClick={onClose}
+              style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"13px 16px",cursor:"pointer",color:C.mid,fontSize:13}}>
+              취소
+            </button>
+          </div>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
+// ─────────────────────────────────────────────
 //  잠금 시트 (관리자)
 // ─────────────────────────────────────────────
 function LockSheet({ date, onClose, onConfirm }) {
@@ -638,11 +710,30 @@ export default function App() {
   const [pw,       setPw]     = useState("");
   const [pwErr,    setPwErr]  = useState(false);
   const [adminPw,  setAdminPw] = useState(DEFAULT_ADMIN_PW);
-  const [showChgPw,setShowChgPw] = useState(false);
+  const [showChgPw,    setShowChgPw]     = useState(false);
+  const [showStudioEdit,setShowStudioEdit] = useState(false);
+  const [studioSettings,setStudioSettings] = useState(STUDIOS); // 커스텀 이름/좌석
   const [date,  setDate]  = useState(today());
   const [sid,   setSid]   = useState("B");
   const [loading,setLoading] = useState(false);
   const [online, setOnline]  = useState(false); // Supabase 연결 여부
+
+  // 스튜디오 설정 로드
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const r = await fetch(`${SB}/rest/v1/settings?key=eq.studio_settings&select=value`, { headers: H });
+        const d = await r.json();
+        if (d?.length && d[0].value) {
+          const saved = JSON.parse(d[0].value);
+          setStudioSettings(STUDIOS.map(s=>{
+            const found = saved.find(x=>x.id===s.id);
+            return found ? {...s, name:found.name, seats:found.seats} : s;
+          }));
+        }
+      } catch {}
+    })();
+  },[]);
 
   // 관리자 비밀번호 Supabase에서 로드
   useEffect(()=>{
@@ -656,7 +747,7 @@ export default function App() {
   },[]);
 
   const week    = useMemo(()=>getDates(),[]);
-  const studio  = STUDIOS.find(s=>s.id===sid)||STUDIOS[1];
+  const studio  = studioSettings.find(s=>s.id===sid)||studioSettings[1];
 
   // ── Supabase에서 해당 날짜 데이터 로드 ──────
   const loadDate = useCallback(async (d) => {
@@ -706,6 +797,7 @@ export default function App() {
 
   // ── 스튜디오 카드 상태 ─────────────────────
   const studioStat = s => {
+    const stInfo = studioSettings.find(x=>x.id===s.id)||s;
     const allLocked = SLOTS.every(slot=>slotLock(dateLocks,s.id,date,slot));
     if(allLocked) return "locked";
     const minRem = SLOTS.reduce((mn,slot)=>{
@@ -786,7 +878,7 @@ export default function App() {
           <div style={{marginBottom:16}}>
             <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:8,letterSpacing:.5}}>스튜디오 선택</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
-              {STUDIOS.map(s=>{
+              {studioSettings.map(s=>{
                 const st=studioStat(s), sel=s.id===sid;
                 const stC=st==="locked"?"#B0BAD0":st==="full"?C.err:st==="low"?C.warn:C.ok;
                 const booked_pct = SLOTS.reduce((mx,slot)=>Math.max(mx,slotBooked(dateRes,s.id,slot)/s.seats),0);
@@ -852,20 +944,54 @@ export default function App() {
         {/* ─── 내 예약 탭 ─── */}
         {tab==="mine" && <MyTab allRes={res} onCancel={onCancel}/>}
 
-        {showChgPw && (
+        {showStudioEdit && (
+        <StudioEditSheet
+          studios={studioSettings}
+          onClose={()=>setShowStudioEdit(false)}
+          onSave={updated=>setStudioSettings(STUDIOS.map(s=>{
+            const u=updated.find(x=>x.id===s.id);
+            return u?{...s,name:u.name,seats:u.seats}:s;
+          }))}
+        />
+      )}
+      {showChgPw && (
         <ChangePwSheet currentPw={adminPw} onClose={()=>setShowChgPw(false)} onChanged={pw=>setAdminPw(pw)}/>
       )}
       {/* ─── 관리자 탭 ─── */}
         {tab==="admin" && (admin ? (
           <div>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-              <div style={{fontSize:17,fontWeight:900,color:C.navy}}>관리자 모드</div>
+            <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:12}}>관리자 모드</div>
+
+            {/* 관리자 버튼 모음 */}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:20}}>
+              <button onClick={()=>setShowStudioEdit(true)}
+                style={{background:C.navy,color:"#fff",border:"none",borderRadius:9,padding:"9px 16px",cursor:"pointer",fontSize:12,fontWeight:700}}>
+                🏛 스튜디오 설정
+              </button>
               <button onClick={()=>setShowChgPw(true)}
-                style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:11,color:C.mid,fontWeight:600}}>
+                style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 14px",cursor:"pointer",fontSize:12,color:C.mid,fontWeight:600}}>
                 🔑 비밀번호 변경
               </button>
             </div>
-            <div style={{fontSize:12,color:C.mid,marginBottom:16}}>날짜 선택 후 예약 현황을 확인하세요</div>
+
+            {/* 잠금 추가 */}
+            <div style={{background:"#FEF2F2",borderRadius:13,padding:16,marginBottom:20,border:`1px solid ${C.err}22`}}>
+              <div style={{fontSize:13,fontWeight:800,color:C.err,marginBottom:12}}>🔒 강의 잠금 관리</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+                {studioSettings.map(s=>(
+                  <button key={s.id} onClick={()=>{setSid(s.id);setTab("book");}}
+                    style={{background:s.bg,border:`1.5px solid ${s.color}44`,borderRadius:8,padding:"7px 14px",
+                      cursor:"pointer",fontSize:12,fontWeight:700,color:s.color}}>
+                    {s.name} 잠금 추가 →
+                  </button>
+                ))}
+              </div>
+              <div style={{fontSize:11,color:C.light}}>
+                💡 스튜디오 버튼 클릭 → 예약 탭으로 이동 → "🔒 강의 잠금 추가" 버튼 사용
+              </div>
+            </div>
+
+            <div style={{fontSize:12,color:C.mid,marginBottom:16}}>날짜별 예약 현황</div>
 
             {/* 날짜 선택 */}
             <div style={{display:"flex",gap:7,overflowX:"auto",marginBottom:18,paddingBottom:4}}>
@@ -881,7 +1007,7 @@ export default function App() {
             </div>
 
             {/* 스튜디오별 현황 */}
-            {STUDIOS.map(s=>{
+            {studioSettings.map(s=>{
               const sRes   = dateRes.filter(r=>r.studio_id===s.id);
               const sLocks = dateLocks.filter(l=>l.studio_id===s.id||l.studio_id==="ALL");
               const fixCount = SLOTS.filter(slot=>fixedLock(s.id,date,slot)).length;
