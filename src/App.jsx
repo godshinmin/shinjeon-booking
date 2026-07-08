@@ -17,17 +17,29 @@ const sbFetch = async (path) => {
 };
 const sbInsert = async (table, body) => {
   try {
-    await fetch(`${SB}/rest/v1/${table}`, {
+    const r = await fetch(`${SB}/rest/v1/${table}`, {
       method: "POST",
       headers: { ...H, "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify(body),
     });
-  } catch {}
+    if (!r.ok) {
+      const t = await r.text().catch(()=> "");
+      console.error(`[Supabase] ${table} 저장 실패 (${r.status}):`, t);
+      return false;
+    }
+    return true;
+  } catch (e) { console.error(`[Supabase] ${table} 저장 중 네트워크 오류:`, e); return false; }
 };
 const sbDelete = async (table, filter) => {
   try {
-    await fetch(`${SB}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: H });
-  } catch {}
+    const r = await fetch(`${SB}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: H });
+    if (!r.ok) {
+      const t = await r.text().catch(()=> "");
+      console.error(`[Supabase] ${table} 삭제 실패 (${r.status}):`, t);
+      return false;
+    }
+    return true;
+  } catch (e) { console.error(`[Supabase] ${table} 삭제 중 네트워크 오류:`, e); return false; }
 };
 
 // ─────────────────────────────────────────────
@@ -397,8 +409,8 @@ function StudioEditSheet({ studios, onClose, onSave }) {
 // ─────────────────────────────────────────────
 //  잠금 시트 (관리자)
 // ─────────────────────────────────────────────
-function LockSheet({ date, onClose, onConfirm }) {
-  const [sid,setSid]     = useState("B");
+function LockSheet({ date, studio, onClose, onConfirm }) {
+  const [sid,setSid]     = useState(studio?.id || "B"); // 현재 보고 있던 스튜디오를 기본 선택
   const [t1,setT1]       = useState("09:00");
   const [t2,setT2]       = useState("22:00");
   const [reason,setReason] = useState("강의");
@@ -577,7 +589,7 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
           onConfirm={p=>{ onBook(p); setDone(p); setSheet(null); clearSel(); }}/>
       )}
       {sheet==="lock" && (
-        <LockSheet date={date}
+        <LockSheet date={date} studio={studio}
           onClose={()=>setSheet(null)}
           onConfirm={p=>{ onAddLock(p); setSheet(null); }}/>
       )}
@@ -931,29 +943,35 @@ export default function App() {
 
   useEffect(()=>{ loadDate(date); }, [date]);
 
+  // 백그라운드 저장 실패 시 화면에 보여줄 경고 메시지
+  const [syncError, setSyncError] = useState("");
+  const flagIfFailed = useCallback((ok, label) => {
+    if (!ok) setSyncError(`⚠️ ${label} 서버 저장에 실패했어요. 새로고침하면 사라질 수 있어요. (네트워크 또는 권한 문제)`);
+  }, []);
+
   // ── 예약 추가 (즉시 state 반영 + 백그라운드 저장) ─
   const onBook = useCallback(payload => {
     setRes(prev => [...prev, payload]);        // 즉시 UI 반영
-    sbInsert("studio_reservations", payload);  // 백그라운드 저장
-  }, []);
+    sbInsert("studio_reservations", payload).then(ok=>flagIfFailed(ok,"예약"));  // 백그라운드 저장
+  }, [flagIfFailed]);
 
   // ── 예약 취소 ─────────────────────────────
   const onCancel = useCallback(id => {
     setRes(prev => prev.filter(r=>r.id!==id));
-    sbDelete("studio_reservations", `id=eq.${id}`);
-  }, []);
+    sbDelete("studio_reservations", `id=eq.${id}`).then(ok=>flagIfFailed(ok,"예약 취소"));
+  }, [flagIfFailed]);
 
   // ── 잠금 추가 ─────────────────────────────
   const onAddLock = useCallback(payload => {
     setLocks(prev => [...prev, payload]);
-    sbInsert("studio_locks", payload);
-  }, []);
+    sbInsert("studio_locks", payload).then(ok=>flagIfFailed(ok,"잠금"));
+  }, [flagIfFailed]);
 
   // ── 잠금 해제 ─────────────────────────────
   const onDelLock = useCallback(id => {
     setLocks(prev => prev.filter(l=>l.id!==id));
-    sbDelete("studio_locks", `id=eq.${id}`);
-  }, []);
+    sbDelete("studio_locks", `id=eq.${id}`).then(ok=>flagIfFailed(ok,"잠금 해제"));
+  }, [flagIfFailed]);
 
   // ── 날짜별 res/locks 필터 ─────────────────
   const dateRes   = useMemo(()=>res.filter(r=>r.date===date),   [res,   date]);
@@ -978,6 +996,18 @@ export default function App() {
 
   return (
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Noto Sans KR',sans-serif",maxWidth:520,margin:"0 auto"}}>
+
+      {/* 저장 실패 경고 배너 */}
+      {syncError && (
+        <div style={{position:"sticky",top:0,zIndex:200,background:C.err,color:"#fff",padding:"9px 14px",
+          fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:10}}>
+          <span style={{flex:1}}>{syncError}</span>
+          <button onClick={()=>setSyncError("")}
+            style={{background:"#ffffff33",border:"none",borderRadius:6,color:"#fff",padding:"4px 9px",cursor:"pointer",fontSize:11}}>
+            닫기
+          </button>
+        </div>
+      )}
 
       {/* 헤더 */}
       <header style={{background:C.navy,padding:"12px 16px",position:"sticky",top:0,zIndex:100,borderBottom:`2px solid ${C.accent}44`}}>
