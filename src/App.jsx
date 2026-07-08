@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
 // ─────────────────────────────────────────────
 //  Supabase (백그라운드 동기화용)
@@ -94,7 +94,12 @@ const isOpen = ds => {
   const today9 = new Date(); today9.setHours(9,0,0,0);
   return now >= today9; // 9시 이후면 3일치 전부 열림
 };
+
+// 일반 사용자용 날짜 목록 (오늘 포함 4일치)
 const getDates = () => Array.from({length:4},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return toStr(d); });
+
+// 관리자용 날짜 목록 (오늘 포함 2주 = 14일치)
+const getAdminDates = () => Array.from({length:14},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return toStr(d); });
 
 // 고정 잠금 확인
 const fixedLock = (sid,ds,slot) => {
@@ -585,9 +590,6 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
 }
 
 // ─────────────────────────────────────────────
-//  내 예약 탭
-// ─────────────────────────────────────────────
-// ─────────────────────────────────────────────
 //  일괄 취소 확인 시트
 // ─────────────────────────────────────────────
 function BulkCancelSheet({ bookings, studioSettings, onClose, onConfirm }) {
@@ -833,7 +835,12 @@ export default function App() {
   const [loading,setLoading] = useState(false);
   const [online, setOnline]  = useState(false); // Supabase 연결 여부
 
-  // 스튜디오 설정 로드: Supabase → localStorage → 기본값
+  // 마지막으로 받아온 studio_settings 원본 문자열 (불필요한 리렌더 방지용)
+  const lastStudioRaw = useRef(null);
+
+  // 스튜디오 설정 로드 + 주기적 동기화
+  // (관리자가 이름/좌석을 바꾸면, 이미 켜져 있는 다른 사람 화면에도 자동 반영되도록
+  //  일정 주기로 Supabase 최신값을 다시 확인합니다)
   useEffect(()=>{
     const applySettings = (saved) => {
       if (!saved?.length) return;
@@ -842,25 +849,44 @@ export default function App() {
         return found ? {...s, name:found.name, seats:Number(found.seats)||s.seats} : s;
       }));
     };
-    // 1) localStorage 먼저 (빠름)
-    try {
-      const local = localStorage.getItem("sj_studio_settings");
-      if (local) applySettings(JSON.parse(local));
-    } catch {}
-    // 2) Supabase에서 최신값 로드 (느리지만 정확)
-    (async()=>{
+
+    const fetchLatest = async () => {
       try {
         const r = await fetch(`${SB}/rest/v1/settings?key=eq.studio_settings&select=value`, { headers: H });
         if (r.ok) {
           const d = await r.json();
-          if (d?.length && d[0].value) {
+          if (d?.length && d[0].value && d[0].value !== lastStudioRaw.current) {
+            lastStudioRaw.current = d[0].value;
             const saved = JSON.parse(d[0].value);
             applySettings(saved);
             localStorage.setItem("sj_studio_settings", JSON.stringify(saved));
           }
         }
       } catch {}
-    })();
+    };
+
+    // 1) localStorage 먼저 (빠름)
+    try {
+      const local = localStorage.getItem("sj_studio_settings");
+      if (local) { applySettings(JSON.parse(local)); lastStudioRaw.current = local; }
+    } catch {}
+
+    // 2) Supabase에서 최신값 로드
+    fetchLatest();
+
+    // 3) 5초마다 최신값 재확인 (다른 사람이 바꾼 내용을 실시간에 가깝게 반영)
+    const poll = setInterval(fetchLatest, 5000);
+
+    // 4) 앱으로 다시 돌아왔을 때(탭 전환 복귀 등) 즉시 재확인
+    const onFocus = () => fetchLatest();
+    window.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(poll);
+      window.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
   },[]);
 
   // 관리자 비밀번호 로드: localStorage → Supabase
@@ -883,7 +909,8 @@ export default function App() {
     })();
   },[]);
 
-  const week    = useMemo(()=>getDates(),[]);
+  // 일반 사용자: 오늘+3일 / 관리자: 오늘+14일
+  const week = useMemo(()=> admin ? getAdminDates() : getDates(), [admin]);
   const studio  = studioSettings.find(s=>s.id===sid)||studioSettings[1];
 
   // ── Supabase에서 해당 날짜 데이터 로드 ──────
@@ -991,10 +1018,11 @@ export default function App() {
 
           {/* 날짜 선택 */}
           <div style={{marginBottom:16}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:8,letterSpacing:.5}}>날짜</div>
+            <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:8,letterSpacing:.5}}>날짜{admin&&" (관리자: 2주치 표시)"}</div>
             <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:4}}>
               {week.map(d=>{
-                const open=isOpen(d), isToday=d===today(), sel=d===date;
+                const open = admin ? true : isOpen(d); // 관리자는 오픈 제한 없이 전부 선택 가능
+                const isToday=d===today(), sel=d===date;
                 return (
                   <button key={d} onClick={()=>open&&setDate(d)} disabled={!open} style={{
                     flexShrink:0,padding:"9px 12px",borderRadius:11,textAlign:"center",
@@ -1008,7 +1036,7 @@ export default function App() {
                 );
               })}
             </div>
-            <div style={{fontSize:10,color:C.light,marginTop:6}}>💡 매일 오전 9시에 3일치 예약 오픈</div>
+            <div style={{fontSize:10,color:C.light,marginTop:6}}>💡 매일 오전 9시에 3일치 예약 오픈{admin&&" · 관리자는 2주 뒤까지 관리 가능"}</div>
           </div>
 
           {/* 스튜디오 카드 */}
@@ -1085,10 +1113,13 @@ export default function App() {
         <StudioEditSheet
           studios={studioSettings}
           onClose={()=>setShowStudioEdit(false)}
-          onSave={updated=>setStudioSettings(STUDIOS.map(s=>{
-            const u=updated.find(x=>x.id===s.id);
-            return u?{...s,name:u.name,seats:u.seats}:s;
-          }))}
+          onSave={updated=>{
+            setStudioSettings(STUDIOS.map(s=>{
+              const u=updated.find(x=>x.id===s.id);
+              return u?{...s,name:u.name,seats:u.seats}:s;
+            }));
+            lastStudioRaw.current = JSON.stringify(updated); // 내 저장 직후엔 폴링이 곧바로 덮어쓰지 않도록 기준값 갱신
+          }}
         />
       )}
       {showChgPw && (
@@ -1124,15 +1155,15 @@ export default function App() {
                 ))}
               </div>
               <div style={{fontSize:11,color:C.light}}>
-                💡 스튜디오 버튼 클릭 → 예약 탭으로 이동 → "🔒 강의 잠금 추가" 버튼 사용
+                💡 스튜디오 버튼 클릭 → 예약 탭으로 이동 → "🔒 강의 잠금 추가" 버튼 사용 (2주 뒤까지 날짜 선택 가능)
               </div>
             </div>
 
-            <div style={{fontSize:12,color:C.mid,marginBottom:16}}>날짜별 예약 현황</div>
+            <div style={{fontSize:12,color:C.mid,marginBottom:16}}>날짜별 예약 현황 (오늘부터 2주치)</div>
 
             {/* 날짜 선택 */}
             <div style={{display:"flex",gap:7,overflowX:"auto",marginBottom:18,paddingBottom:4}}>
-              {getDates().map(d=>(
+              {getAdminDates().map(d=>(
                 <button key={d} onClick={()=>setDate(d)} style={{
                   flexShrink:0,padding:"8px 13px",borderRadius:9,
                   border:`2px solid ${d===date?C.blue:C.border}`,
