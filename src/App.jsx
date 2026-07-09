@@ -279,11 +279,12 @@ function ChangePwSheet({ currentPw, onClose, onChanged }) {
     if (cur !== currentPw)   { setErr("현재 비밀번호가 틀렸어요"); return; }
     if (next.length < 4)     { setErr("새 비밀번호는 4자 이상이어야 해요"); return; }
     if (next !== con)        { setErr("새 비밀번호가 일치하지 않아요"); return; }
-    // Supabase settings 테이블에 저장
+    // Supabase settings 테이블에 저장 (기존 값 삭제 후 새로 삽입 → 중복 행 방지, 항상 최신값만 유지)
     try {
+      await fetch(`${SB}/rest/v1/settings?key=eq.booking_admin_pw`, { method: "DELETE", headers: H });
       await fetch(`${SB}/rest/v1/settings`, {
         method: "POST",
-        headers: { ...H, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+        headers: { ...H, "Content-Type": "application/json", Prefer: "return=minimal" },
         body: JSON.stringify({ key: "booking_admin_pw", value: next }),
       });
     } catch {}
@@ -345,11 +346,12 @@ function StudioEditSheet({ studios, onClose, onSave }) {
     const payload = studios.map((s,i)=>({ id:s.id, name:names[i], seats:parseInt(seats[i])||s.seats }));
     // 1) localStorage에 즉시 저장 (새로고침해도 유지)
     try { localStorage.setItem("sj_studio_settings", JSON.stringify(payload)); } catch {}
-    // 2) Supabase에 저장 (다른 기기와 동기화)
+    // 2) Supabase에 저장 (기존 값 삭제 후 새로 삽입 → 중복 행 방지, 항상 최신값만 유지, 다른 기기와 동기화)
     try {
+      await fetch(`${SB}/rest/v1/settings?key=eq.studio_settings`, { method:"DELETE", headers: H });
       await fetch(`${SB}/rest/v1/settings`, {
         method:"POST",
-        headers:{...H,"Content-Type":"application/json",Prefer:"resolution=merge-duplicates"},
+        headers:{...H,"Content-Type":"application/json",Prefer:"return=minimal"},
         body:JSON.stringify({key:"studio_settings",value:JSON.stringify(payload)}),
       });
     } catch {}
@@ -867,9 +869,11 @@ export default function App() {
         const r = await fetch(`${SB}/rest/v1/settings?key=eq.studio_settings&select=value`, { headers: H });
         if (r.ok) {
           const d = await r.json();
-          if (d?.length && d[0].value && d[0].value !== lastStudioRaw.current) {
-            lastStudioRaw.current = d[0].value;
-            const saved = JSON.parse(d[0].value);
+          // 예전 버전 코드가 남긴 중복 행이 아직 있을 수 있으므로, 배열의 맨 마지막(가장 최근 삽입) 값을 사용
+          const latest = d?.length ? d[d.length-1] : null;
+          if (latest?.value && latest.value !== lastStudioRaw.current) {
+            lastStudioRaw.current = latest.value;
+            const saved = JSON.parse(latest.value);
             applySettings(saved);
             localStorage.setItem("sj_studio_settings", JSON.stringify(saved));
           }
@@ -912,9 +916,10 @@ export default function App() {
         const r = await fetch(`${SB}/rest/v1/settings?key=eq.booking_admin_pw&select=value`, { headers: H });
         if (r.ok) {
           const d = await r.json();
-          if (d?.length && d[0].value) {
-            setAdminPw(d[0].value);
-            localStorage.setItem("sj_booking_admin_pw", d[0].value);
+          const latest = d?.length ? d[d.length-1] : null; // 중복 행 대비: 가장 최근 값 사용
+          if (latest?.value) {
+            setAdminPw(latest.value);
+            localStorage.setItem("sj_booking_admin_pw", latest.value);
           }
         }
       } catch {}
@@ -926,8 +931,8 @@ export default function App() {
   const studio  = studioSettings.find(s=>s.id===sid)||studioSettings[1];
 
   // ── Supabase에서 해당 날짜 데이터 로드 ──────
-  const loadDate = useCallback(async (d) => {
-    setLoading(true);
+  const loadDate = useCallback(async (d, silent=false) => {
+    if (!silent) setLoading(true);
     const [rData, lData] = await Promise.all([
       sbFetch(`studio_reservations?date=eq.${d}&order=start_time.asc`),
       sbFetch(`studio_locks?date=eq.${d}`),
@@ -938,10 +943,16 @@ export default function App() {
       setLocks(prev => [...prev.filter(l=>l.date!==d), ...(lData||[])]);
       setOnline(true);
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
-  useEffect(()=>{ loadDate(date); }, [date]);
+  useEffect(()=>{
+    loadDate(date);
+    // 8초마다 현재 보고 있는 날짜의 예약/잠금 현황을 조용히 다시 불러와서
+    // 다른 사람(관리자 포함)의 변경사항이 자동으로 화면에 반영되도록 함
+    const poll = setInterval(()=> loadDate(date, true), 8000);
+    return () => clearInterval(poll);
+  }, [date]);
 
   // 백그라운드 저장 실패 시 화면에 보여줄 경고 메시지
   const [syncError, setSyncError] = useState("");
