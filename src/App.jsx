@@ -7,6 +7,7 @@ const SB = "https://yigtucvlikxeddqghtqw.supabase.co";
 const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpZ3R1Y3ZsaWt4ZWRkcWdodHF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTcwNjgsImV4cCI6MjA5Nzg3MzA2OH0.MoTdu9sYMOLIaLhCNY9Ivs3hg32MbiHoqlOMcbRpIwY";
 const H  = { apikey: KEY, Authorization: `Bearer ${KEY}` };
 const DEFAULT_ADMIN_PW = "0000";
+const ENTRY_CODE = "0529"; // 학원 수강생 전용 입장 코드
 
 // Supabase 요청 (실패해도 조용히)
 const sbFetch = async (path) => {
@@ -849,6 +850,30 @@ export default function App() {
   const [loading,setLoading] = useState(false);
   const [online, setOnline]  = useState(false); // Supabase 연결 여부
 
+  // ── 입장 코드 게이트 (학원 수강생 전용) ─────
+  const [entryOk,  setEntryOk]  = useState(false);
+  const [entryChecked, setEntryChecked] = useState(false); // localStorage 확인 끝났는지
+  const [entryInput, setEntryInput] = useState("");
+  const [entryErr,  setEntryErr]  = useState(false);
+
+  useEffect(()=>{
+    try {
+      if (localStorage.getItem("sj_booking_entry_ok") === "1") setEntryOk(true);
+    } catch {}
+    setEntryChecked(true);
+  },[]);
+
+  const tryEntry = () => {
+    if (entryInput.trim() === ENTRY_CODE) {
+      setEntryOk(true);
+      setEntryErr(false);
+      try { localStorage.setItem("sj_booking_entry_ok", "1"); } catch {}
+    } else {
+      setEntryErr(true);
+      setEntryInput("");
+    }
+  };
+
   // 마지막으로 받아온 studio_settings 원본 문자열 (불필요한 리렌더 방지용)
   const lastStudioRaw = useRef(null);
 
@@ -1004,6 +1029,41 @@ export default function App() {
     if(pw===adminPw){ setAdmin(true); setPwErr(false); setPw(""); }
     else setPwErr(true);
   };
+
+  // ── 입장 코드 게이트 화면 ─────────────────
+  if (!entryChecked) return null; // localStorage 확인 전 깜빡임 방지
+  if (!entryOk) {
+    return (
+      <div style={{minHeight:"100vh",background:C.navy,fontFamily:"'Noto Sans KR',sans-serif",
+        display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+        <div style={{width:"100%",maxWidth:340,textAlign:"center"}}>
+          <div style={{width:56,height:56,borderRadius:14,background:C.accent,display:"flex",
+            alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 18px"}}>🏛</div>
+          <div style={{color:"#fff",fontWeight:900,fontSize:19,marginBottom:4}}>신전스퀘어</div>
+          <div style={{color:C.accent,fontSize:11,letterSpacing:1.5,marginBottom:28}}>STUDIO RESERVATION</div>
+          <div style={{background:"#ffffff10",borderRadius:16,padding:24,border:"1px solid #ffffff22"}}>
+            <div style={{color:"#fff",fontSize:14,fontWeight:700,marginBottom:14}}>입장 코드를 입력해주세요</div>
+            <div style={{color:"#a0b0cc",fontSize:11,marginBottom:16}}>신전스퀘어 수강생만 이용할 수 있어요</div>
+            <input
+              value={entryInput}
+              onChange={e=>{setEntryInput(e.target.value.replace(/\D/g,"").slice(0,10));setEntryErr(false);}}
+              onKeyDown={e=>e.key==="Enter"&&tryEntry()}
+              placeholder="입장 코드" autoFocus inputMode="numeric"
+              style={{width:"100%",padding:"13px 14px",borderRadius:11,
+                border:`1.5px solid ${entryErr?C.err:"#ffffff33"}`,fontSize:16,
+                outline:"none",boxSizing:"border-box",textAlign:"center",letterSpacing:6,
+                background:"#ffffff12",color:"#fff",marginBottom:10}}/>
+            {entryErr && <div style={{fontSize:12,color:"#FF8A8A",marginBottom:10}}>❌ 코드가 올바르지 않아요</div>}
+            <button onClick={tryEntry}
+              style={{width:"100%",background:C.accent,color:C.navy,border:"none",borderRadius:11,
+                padding:13,fontWeight:800,cursor:"pointer",fontSize:15}}>
+              입장하기
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Noto Sans KR',sans-serif",maxWidth:520,margin:"0 auto"}}>
