@@ -269,30 +269,29 @@ function DoneSheet({ booking, studio, onClose }) {
 // ─────────────────────────────────────────────
 //  관리자 비밀번호 변경 시트
 // ─────────────────────────────────────────────
-function ChangePwSheet({ currentPw, onClose, onChanged }) {
+function ChangePwSheet({ currentPw, onClose, onChanged, onSyncFail }) {
   const [cur,  setCur]  = useState("");
   const [next, setNext] = useState("");
   const [con,  setCon]  = useState("");
   const [err,  setErr]  = useState("");
   const [done, setDone] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const save = async () => {
     if (cur !== currentPw)   { setErr("현재 비밀번호가 틀렸어요"); return; }
     if (next.length < 4)     { setErr("새 비밀번호는 4자 이상이어야 해요"); return; }
     if (next !== con)        { setErr("새 비밀번호가 일치하지 않아요"); return; }
     // Supabase settings 테이블에 저장 (기존 값 삭제 후 새로 삽입 → 중복 행 방지, 항상 최신값만 유지)
-    try {
-      await fetch(`${SB}/rest/v1/settings?key=eq.booking_admin_pw`, { method: "DELETE", headers: H });
-      await fetch(`${SB}/rest/v1/settings`, {
-        method: "POST",
-        headers: { ...H, "Content-Type": "application/json", Prefer: "return=minimal" },
-        body: JSON.stringify({ key: "booking_admin_pw", value: next }),
-      });
-    } catch {}
+    await sbDelete("settings", "key=eq.booking_admin_pw");
+    const ok = await sbInsert("settings", { key: "booking_admin_pw", value: next });
+    if (!ok) {
+      setFailed(true);
+      onSyncFail?.("관리자 비밀번호가 서버에 저장되지 않았어요. 이 기기에서만 바뀌고 다른 기기에는 반영되지 않을 수 있어요.");
+    }
     try { localStorage.setItem("sj_booking_admin_pw", next); } catch {}
     onChanged(next);
     setDone(true);
-    setTimeout(onClose, 1500);
+    setTimeout(onClose, ok ? 1500 : 2500);
   };
 
   return (
@@ -300,8 +299,11 @@ function ChangePwSheet({ currentPw, onClose, onChanged }) {
       <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:20}}>🔑 관리자 비밀번호 변경</div>
       {done ? (
         <div style={{textAlign:"center",padding:"20px 0"}}>
-          <div style={{fontSize:40,marginBottom:8}}>✅</div>
-          <div style={{fontSize:15,fontWeight:700,color:C.ok}}>비밀번호가 변경됐어요!</div>
+          <div style={{fontSize:40,marginBottom:8}}>{failed?"⚠️":"✅"}</div>
+          <div style={{fontSize:15,fontWeight:700,color:failed?C.err:C.ok}}>
+            {failed ? "이 기기에만 변경됐어요" : "비밀번호가 변경됐어요!"}
+          </div>
+          {failed && <div style={{fontSize:11,color:C.mid,marginTop:6}}>서버 동기화 실패 — 다른 기기엔 반영 안 될 수 있어요</div>}
         </div>
       ) : (
         <>
@@ -336,29 +338,28 @@ function ChangePwSheet({ currentPw, onClose, onChanged }) {
 // ─────────────────────────────────────────────
 //  스튜디오 이름 편집 시트
 // ─────────────────────────────────────────────
-function StudioEditSheet({ studios, onClose, onSave }) {
+function StudioEditSheet({ studios, onClose, onSave, onSyncFail }) {
   const [names, setNames] = useState(studios.map(s=>s.name));
   const [seats, setSeats] = useState(studios.map(s=>s.seats));
   const [saving, setSaving] = useState(false);
   const [done,   setDone]   = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const save = async () => {
     setSaving(true);
     const payload = studios.map((s,i)=>({ id:s.id, name:names[i], seats:parseInt(seats[i])||s.seats }));
-    // 1) localStorage에 즉시 저장 (새로고침해도 유지)
+    // 1) localStorage에 즉시 저장 (내 기기에서는 새로고침해도 유지)
     try { localStorage.setItem("sj_studio_settings", JSON.stringify(payload)); } catch {}
     // 2) Supabase에 저장 (기존 값 삭제 후 새로 삽입 → 중복 행 방지, 항상 최신값만 유지, 다른 기기와 동기화)
-    try {
-      await fetch(`${SB}/rest/v1/settings?key=eq.studio_settings`, { method:"DELETE", headers: H });
-      await fetch(`${SB}/rest/v1/settings`, {
-        method:"POST",
-        headers:{...H,"Content-Type":"application/json",Prefer:"return=minimal"},
-        body:JSON.stringify({key:"studio_settings",value:JSON.stringify(payload)}),
-      });
-    } catch {}
+    await sbDelete("settings", "key=eq.studio_settings");
+    const ok = await sbInsert("settings", { key:"studio_settings", value:JSON.stringify(payload) });
+    if (!ok) {
+      setFailed(true);
+      onSyncFail?.("스튜디오 설정이 서버에 저장되지 않았어요 (권한/네트워크 문제로 추정). 지금 이 화면에만 보이고 다른 사람에게는 전달되지 않을 수 있어요.");
+    }
     onSave(payload);
     setDone(true);
-    setTimeout(onClose, 1200);
+    setTimeout(onClose, failed ? 2500 : 1200);
   };
 
   return (
@@ -366,8 +367,11 @@ function StudioEditSheet({ studios, onClose, onSave }) {
       <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:20}}>🏛 스튜디오 설정</div>
       {done ? (
         <div style={{textAlign:"center",padding:"20px 0"}}>
-          <div style={{fontSize:40,marginBottom:8}}>✅</div>
-          <div style={{fontSize:15,fontWeight:700,color:C.ok}}>저장됐어요!</div>
+          <div style={{fontSize:40,marginBottom:8}}>{failed?"⚠️":"✅"}</div>
+          <div style={{fontSize:15,fontWeight:700,color:failed?C.err:C.ok}}>
+            {failed ? "이 기기에만 저장됐어요" : "저장됐어요!"}
+          </div>
+          {failed && <div style={{fontSize:11,color:C.mid,marginTop:6}}>서버 동기화 실패 — 다른 사람에겐 반영 안 될 수 있어요</div>}
         </div>
       ) : (
         <>
@@ -1214,6 +1218,7 @@ export default function App() {
         <StudioEditSheet
           studios={studioSettings}
           onClose={()=>setShowStudioEdit(false)}
+          onSyncFail={setSyncError}
           onSave={updated=>{
             setStudioSettings(STUDIOS.map(s=>{
               const u=updated.find(x=>x.id===s.id);
@@ -1224,7 +1229,7 @@ export default function App() {
         />
       )}
       {showChgPw && (
-        <ChangePwSheet currentPw={adminPw} onClose={()=>setShowChgPw(false)} onChanged={pw=>setAdminPw(pw)}/>
+        <ChangePwSheet currentPw={adminPw} onClose={()=>setShowChgPw(false)} onChanged={pw=>setAdminPw(pw)} onSyncFail={setSyncError}/>
       )}
       {/* ─── 관리자 탭 ─── */}
         {tab==="admin" && (admin ? (
