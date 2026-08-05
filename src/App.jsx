@@ -71,13 +71,14 @@ for (let h = 9; h < 22; h++) {
 }
 SLOTS.push("21:30");
 
-// 공지 기준 고정 잠금 (0=일 1=월 2=화 3=수 4=목 5=금 6=토)
-const FIXED = [
-  { s:"A", d:[0,1,2,3,4,5,6], t1:"09:00", t2:"22:00", r:"재오픈 준비중" },
-  { s:"C", d:[0,1,2,3,4,5,6], t1:"09:00", t2:"22:00", r:"재오픈 준비중" },
-  { s:"B", d:[6],             t1:"09:00", t2:"22:00", r:"강의" },
-  { s:"B", d:[0],             t1:"09:00", t2:"18:00", r:"강의" },
-  { s:"B", d:[3,4],           t1:"18:00", t2:"22:00", r:"강의" },
+// 정기(반복) 잠금의 초기 기본값 — 이제 하드코딩이 아니라 DB(settings.recurring_locks)에 저장되고,
+// 관리자가 앱에서 직접 추가/삭제할 수 있음. DB에 아직 저장된 값이 없을 때만 이 기본값을 사용.
+const DEFAULT_RECURRING_LOCKS = [
+  { id:"rec-a-all", studio_id:"A", days:[0,1,2,3,4,5,6], start_time:"09:00", end_time:"22:00", reason:"재오픈 준비중" },
+  { id:"rec-c-all", studio_id:"C", days:[0,1,2,3,4,5,6], start_time:"09:00", end_time:"22:00", reason:"재오픈 준비중" },
+  { id:"rec-b-sat",  studio_id:"B", days:[6],   start_time:"09:00", end_time:"22:00", reason:"강의" },
+  { id:"rec-b-sun",  studio_id:"B", days:[0],   start_time:"09:00", end_time:"18:00", reason:"강의" },
+  { id:"rec-b-wedthu",studio_id:"B", days:[3,4], start_time:"18:00", end_time:"22:00", reason:"강의" },
 ];
 const DAY = ["일","월","화","수","목","금","토"];
 
@@ -114,10 +115,10 @@ const getDates = () => Array.from({length:4},(_,i)=>{ const d=new Date(); d.setD
 // 관리자용 날짜 목록 (오늘 포함 2주 = 14일치)
 const getAdminDates = () => Array.from({length:14},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return toStr(d); });
 
-// 고정 잠금 확인
-const fixedLock = (sid,ds,slot) => {
+// 정기(반복) 잠금 확인 — recurringLocks는 DB에서 불러온 동적 배열 (관리자가 추가/삭제 가능)
+const fixedLock = (recurringLocks,sid,ds,slot) => {
   const day=dow(ds), end=add30(slot);
-  return FIXED.find(f=>f.s===sid&&f.d.includes(day)&&f.t1<end&&f.t2>slot);
+  return recurringLocks.find(f=>(f.studio_id===sid||f.studio_id==="ALL")&&f.days.includes(day)&&f.start_time<end&&f.end_time>slot);
 };
 
 // 수동 잠금 확인
@@ -127,9 +128,9 @@ const manualLock = (locks,sid,slot) => {
 };
 
 // 슬롯 잠금 여부 + 이유
-const slotLock = (locks,sid,ds,slot) => {
-  const fix=fixedLock(sid,ds,slot);
-  if(fix) return fix.r;
+const slotLock = (recurringLocks,locks,sid,ds,slot) => {
+  const fix=fixedLock(recurringLocks,sid,ds,slot);
+  if(fix) return fix.reason;
   const man=manualLock(locks,sid,slot);
   if(man) return man.reason||"강의";
   return null;
@@ -416,7 +417,7 @@ function StudioEditSheet({ studios, onClose, onSave, onSyncFail }) {
 // ─────────────────────────────────────────────
 //  잠금 시트 (관리자)
 // ─────────────────────────────────────────────
-function LockSheet({ date, studio, onClose, onConfirm }) {
+function LockSheet({ date, studio, studios, onClose, onConfirm }) {
   const [sid,setSid]     = useState(studio?.id || "B"); // 현재 보고 있던 스튜디오를 기본 선택
   const [t1,setT1]       = useState("09:00");
   const [t2,setT2]       = useState("22:00");
@@ -439,7 +440,7 @@ function LockSheet({ date, studio, onClose, onConfirm }) {
           <select value={sid} onChange={e=>setSid(e.target.value)}
             style={{width:"100%",padding:"11px 12px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,outline:"none"}}>
             <option value="ALL">전체 스튜디오</option>
-            {STUDIOS.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            {(studios||STUDIOS).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -474,9 +475,87 @@ function LockSheet({ date, studio, onClose, onConfirm }) {
 }
 
 // ─────────────────────────────────────────────
+//  정기(반복) 잠금 규칙 추가 시트 (관리자)
+// ─────────────────────────────────────────────
+function RecurringLockSheet({ studio, studios, onClose, onConfirm }) {
+  const [sid,setSid]       = useState(studio?.id || "B");
+  const [days,setDays]     = useState([]);
+  const [t1,setT1]         = useState("18:00");
+  const [t2,setT2]         = useState("22:00");
+  const [reason,setReason] = useState("강의");
+  const [err,setErr]       = useState("");
+
+  const toggleDay = d => setDays(prev => prev.includes(d) ? prev.filter(x=>x!==d) : [...prev,d].sort());
+
+  const save = () => {
+    if(days.length===0){ setErr("반복할 요일을 1개 이상 선택해주세요"); return; }
+    if(t1>=t2){ setErr("종료시간이 시작보다 늦어야 해요"); return; }
+    onConfirm({ id:uid(), studio_id:sid, days, start_time:t1, end_time:t2, reason });
+    onClose();
+  };
+
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{fontSize:17,fontWeight:900,color:C.navy,marginBottom:4}}>🔁 정기 잠금 규칙 추가</div>
+      <div style={{fontSize:11,color:C.mid,marginBottom:16}}>선택한 요일마다 매주 반복해서 잠겨요</div>
+      {err && <div style={{background:"#FEF2F2",borderRadius:10,padding:"9px 14px",fontSize:12,color:C.err,marginBottom:12}}>{err}</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:20}}>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>스튜디오</label>
+          <select value={sid} onChange={e=>setSid(e.target.value)}
+            style={{width:"100%",padding:"11px 12px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,outline:"none"}}>
+            <option value="ALL">전체 스튜디오</option>
+            {(studios||STUDIOS).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>반복 요일 (여러 개 선택 가능)</label>
+          <div style={{display:"flex",gap:6}}>
+            {DAY.map((d,i)=>(
+              <button key={i} onClick={()=>toggleDay(i)}
+                style={{flex:1,padding:"9px 0",borderRadius:9,border:`1.5px solid ${days.includes(i)?C.err:C.border}`,
+                  background:days.includes(i)?C.err:C.card,color:days.includes(i)?"#fff":C.mid,
+                  fontWeight:700,fontSize:13,cursor:"pointer"}}>
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          {[["시작",t1,setT1],[" 종료",t2,setT2]].map(([lbl,val,set])=>(
+            <div key={lbl}>
+              <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>{lbl}</label>
+              <select value={val} onChange={e=>set(e.target.value)}
+                style={{width:"100%",padding:"11px 12px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,outline:"none"}}>
+                {[...SLOTS,"22:00"].map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:700,color:C.mid,display:"block",marginBottom:5}}>사유</label>
+          <input value={reason} onChange={e=>setReason(e.target.value)}
+            style={{width:"100%",padding:"11px 12px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={save}
+          style={{flex:1,background:C.err,color:"#fff",border:"none",borderRadius:12,padding:13,fontWeight:800,cursor:"pointer",fontSize:14}}>
+          규칙 추가
+        </button>
+        <button onClick={onClose}
+          style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"13px 16px",cursor:"pointer",color:C.mid,fontSize:13}}>
+          취소
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+// ─────────────────────────────────────────────
 //  타임 그리드
 // ─────────────────────────────────────────────
-function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelRes, onDelLock }) {
+function TimeGrid({ studio, studios, date, res, locks, recurringLocks, isAdmin, onBook, onAddLock, onDelRes, onDelLock, onDelRecurring }) {
   const [sel1, setSel1] = useState(null);
   const [sel2, setSel2] = useState(null);
   const [sheet, setSheet] = useState(null); // null | "book" | "lock"
@@ -485,7 +564,7 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
   const clearSel = () => { setSel1(null); setSel2(null); };
 
   const handleClick = useCallback((slot) => {
-    const locked = slotLock(locks, studio.id, date, slot);
+    const locked = slotLock(recurringLocks, locks, studio.id, date, slot);
     const cnt    = slotBooked(res, studio.id, slot);
     if (locked && !isAdmin) return;
     if (cnt >= studio.seats && !isAdmin) return;
@@ -493,7 +572,7 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
     if (!sel1)         { setSel1(slot); setSel2(slot); }
     else if (slot < sel1) { setSel1(slot); setSel2(slot); }
     else                { setSel2(slot); }
-  }, [sel1, locks, res, studio, date, isAdmin]);
+  }, [sel1, recurringLocks, locks, res, studio, date, isAdmin]);
 
   const inRange = s => sel1 && sel2 && s >= sel1 && s <= sel2;
 
@@ -530,7 +609,8 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
       {/* 슬롯 목록 */}
       <div style={{display:"flex",flexDirection:"column",gap:2}}>
         {SLOTS.map(slot => {
-          const lockReason = slotLock(locks, studio.id, date, slot);
+          const fix = fixedLock(recurringLocks, studio.id, date, slot);
+          const lockReason = slotLock(recurringLocks, locks, studio.id, date, slot);
           const cnt  = slotBooked(res, studio.id, slot);
           const ss   = slotStyle(cnt, studio.seats, lockReason);
           const sel  = inRange(slot);
@@ -572,8 +652,19 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
                 </div>
               )}
 
-              {/* 관리자: 수동 잠금 */}
-              {isAdmin && slotLocks.length>0 && !fixedLock(studio.id,date,slot) && (
+              {/* 관리자: 정기(반복) 잠금 — 요일마다 반복 적용되는 규칙이라, 삭제하면 해당 규칙 전체가 없어짐 */}
+              {isAdmin && fix && (
+                <div style={{paddingLeft:52,display:"flex",gap:4,flexWrap:"wrap",marginTop:2,marginBottom:2}}>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:4,background:"#EEF0F6",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#5A6480"}}>
+                    <span style={{color:"#7A85A8"}}>🔁 정기 {fix.reason}</span>
+                    <button onClick={e=>{e.stopPropagation(); if(window.confirm(`매주 반복되는 "${fix.reason}" 잠금 규칙을 완전히 삭제할까요? (이 요일 전체에서 사라져요)`)) onDelRecurring(fix.id);}}
+                      style={{background:"none",border:"none",cursor:"pointer",color:C.err,fontSize:14,padding:0,lineHeight:1,marginLeft:2}}>×</button>
+                  </span>
+                </div>
+              )}
+
+              {/* 관리자: 수동(1회성) 잠금 */}
+              {isAdmin && slotLocks.length>0 && !fix && (
                 <div style={{paddingLeft:52,display:"flex",gap:4,flexWrap:"wrap",marginTop:2,marginBottom:2}}>
                   {slotLocks.filter((l,i,a)=>a.findIndex(x=>x.id===l.id)===i).map(l=>(
                     <span key={l.id} style={{display:"inline-flex",alignItems:"center",gap:4,background:"#FEE2E2",borderRadius:6,padding:"2px 8px",fontSize:11,color:C.err}}>
@@ -596,7 +687,7 @@ function TimeGrid({ studio, date, res, locks, isAdmin, onBook, onAddLock, onDelR
           onConfirm={p=>{ onBook(p); setDone(p); setSheet(null); clearSel(); }}/>
       )}
       {sheet==="lock" && (
-        <LockSheet date={date} studio={studio}
+        <LockSheet date={date} studio={studio} studios={studios}
           onClose={()=>setSheet(null)}
           onConfirm={p=>{ onAddLock(p); setSheet(null); }}/>
       )}
@@ -848,7 +939,9 @@ export default function App() {
   const [adminPw,  setAdminPw] = useState(DEFAULT_ADMIN_PW);
   const [showChgPw,    setShowChgPw]     = useState(false);
   const [showStudioEdit,setShowStudioEdit] = useState(false);
+  const [showRecurringAdd, setShowRecurringAdd] = useState(false);
   const [studioSettings,setStudioSettings] = useState(STUDIOS); // 커스텀 이름/좌석
+  const [recurringLocks, setRecurringLocks] = useState(DEFAULT_RECURRING_LOCKS); // 정기(반복) 잠금 규칙
   const [date,  setDate]  = useState(today());
   const [sid,   setSid]   = useState("B");
   const [loading,setLoading] = useState(false);
@@ -934,7 +1027,58 @@ export default function App() {
     };
   },[]);
 
-  // 관리자 비밀번호 로드: localStorage → Supabase
+  // 마지막으로 받아온 recurring_locks 원본 문자열
+  const lastRecurringRaw = useRef(null);
+
+  // 정기(반복) 잠금 규칙 로드 + 주기적 동기화
+  // (관리자가 정기 잠금을 추가/삭제하면, 이미 켜져 있는 다른 사람 화면에도 자동 반영)
+  useEffect(()=>{
+    const applyRecurring = (saved) => {
+      if (!Array.isArray(saved)) return;
+      setRecurringLocks(saved);
+    };
+
+    const fetchLatest = async () => {
+      try {
+        const r = await fetch(`${SB}/rest/v1/settings?key=eq.recurring_locks&select=value`, { headers: H });
+        if (r.ok) {
+          const d = await r.json();
+          const latest = d?.length ? d[d.length-1] : null;
+          if (latest?.value) {
+            if (latest.value !== lastRecurringRaw.current) {
+              lastRecurringRaw.current = latest.value;
+              const saved = JSON.parse(latest.value);
+              applyRecurring(saved);
+              localStorage.setItem("sj_recurring_locks", latest.value);
+            }
+          } else if (d && d.length === 0 && lastRecurringRaw.current === null) {
+            // DB에 아직 아무것도 없는 최초 상태 → 기존 기본 스케줄을 DB에 저장해서
+            // 이후로는 앱에서 직접 추가/삭제 가능하게 만듦 (1회성 마이그레이션)
+            const initValue = JSON.stringify(DEFAULT_RECURRING_LOCKS);
+            lastRecurringRaw.current = initValue;
+            await sbInsert("settings", { key:"recurring_locks", value: initValue });
+          }
+        }
+      } catch {}
+    };
+
+    try {
+      const local = localStorage.getItem("sj_recurring_locks");
+      if (local) { applyRecurring(JSON.parse(local)); lastRecurringRaw.current = local; }
+    } catch {}
+
+    fetchLatest();
+    const poll = setInterval(fetchLatest, 5000);
+    const onFocus = () => fetchLatest();
+    window.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(poll);
+      window.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  },[]);
   useEffect(()=>{
     try {
       const local = localStorage.getItem("sj_booking_admin_pw");
@@ -1013,6 +1157,28 @@ export default function App() {
     sbDelete("studio_locks", `id=eq.${id}`).then(ok=>flagIfFailed(ok,"잠금 해제"));
   }, [flagIfFailed]);
 
+  // ── 정기(반복) 잠금 저장 (배열 전체를 delete-then-insert로 저장 → 중복 행 방지) ─
+  const saveRecurring = useCallback(async (nextArr) => {
+    const raw = JSON.stringify(nextArr);
+    await sbDelete("settings", "key=eq.recurring_locks");
+    const ok = await sbInsert("settings", { key:"recurring_locks", value: raw });
+    lastRecurringRaw.current = raw; // 내 저장 직후엔 폴링이 곧바로 덮어쓰지 않도록 기준값 갱신
+    try { localStorage.setItem("sj_recurring_locks", raw); } catch {}
+    flagIfFailed(ok, "정기 잠금");
+  }, [flagIfFailed]);
+
+  const onAddRecurring = useCallback((rule) => {
+    const next = [...recurringLocks, rule];
+    setRecurringLocks(next);
+    saveRecurring(next);
+  }, [recurringLocks, saveRecurring]);
+
+  const onDelRecurring = useCallback((id) => {
+    const next = recurringLocks.filter(r=>r.id!==id);
+    setRecurringLocks(next);
+    saveRecurring(next);
+  }, [recurringLocks, saveRecurring]);
+
   // ── 날짜별 res/locks 필터 ─────────────────
   const dateRes   = useMemo(()=>res.filter(r=>r.date===date),   [res,   date]);
   const dateLocks = useMemo(()=>locks.filter(l=>l.date===date), [locks, date]);
@@ -1020,10 +1186,10 @@ export default function App() {
   // ── 스튜디오 카드 상태 ─────────────────────
   const studioStat = s => {
     const stInfo = studioSettings.find(x=>x.id===s.id)||s;
-    const allLocked = SLOTS.every(slot=>slotLock(dateLocks,s.id,date,slot));
+    const allLocked = SLOTS.every(slot=>slotLock(recurringLocks,dateLocks,s.id,date,slot));
     if(allLocked) return "locked";
     const minRem = SLOTS.reduce((mn,slot)=>{
-      if(slotLock(dateLocks,s.id,date,slot)) return mn;
+      if(slotLock(recurringLocks,dateLocks,s.id,date,slot)) return mn;
       return Math.min(mn, s.seats-slotBooked(dateRes,s.id,slot));
     }, s.seats);
     return minRem<=0?"full":minRem<=2?"low":"ok";
@@ -1189,13 +1355,14 @@ export default function App() {
               ))}
             </div>
             <TimeGrid
-              studio={studio} date={date}
-              res={dateRes} locks={dateLocks}
+              studio={studio} studios={studioSettings} date={date}
+              res={dateRes} locks={dateLocks} recurringLocks={recurringLocks}
               isAdmin={admin}
               onBook={onBook}
               onAddLock={onAddLock}
               onDelRes={onCancel}
               onDelLock={onDelLock}
+              onDelRecurring={onDelRecurring}
             />
           </div>
 
@@ -1231,6 +1398,12 @@ export default function App() {
       {showChgPw && (
         <ChangePwSheet currentPw={adminPw} onClose={()=>setShowChgPw(false)} onChanged={pw=>setAdminPw(pw)} onSyncFail={setSyncError}/>
       )}
+      {showRecurringAdd && (
+        <RecurringLockSheet studio={studio} studios={studioSettings}
+          onClose={()=>setShowRecurringAdd(false)}
+          onConfirm={rule=>onAddRecurring(rule)}
+        />
+      )}
       {/* ─── 관리자 탭 ─── */}
         {tab==="admin" && (admin ? (
           <div>
@@ -1250,7 +1423,7 @@ export default function App() {
 
             {/* 잠금 추가 */}
             <div style={{background:"#FEF2F2",borderRadius:13,padding:16,marginBottom:20,border:`1px solid ${C.err}22`}}>
-              <div style={{fontSize:13,fontWeight:800,color:C.err,marginBottom:12}}>🔒 강의 잠금 관리</div>
+              <div style={{fontSize:13,fontWeight:800,color:C.err,marginBottom:12}}>🔒 강의 잠금 관리 (1회성)</div>
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
                 {studioSettings.map(s=>(
                   <button key={s.id} onClick={()=>{setSid(s.id);setTab("book");}}
@@ -1262,6 +1435,41 @@ export default function App() {
               </div>
               <div style={{fontSize:11,color:C.light}}>
                 💡 스튜디오 버튼 클릭 → 예약 탭으로 이동 → "🔒 강의 잠금 추가" 버튼 사용 (2주 뒤까지 날짜 선택 가능)
+              </div>
+            </div>
+
+            {/* 정기(반복) 잠금 규칙 관리 */}
+            <div style={{background:"#EEF0F6",borderRadius:13,padding:16,marginBottom:20,border:"1px solid #C8D0E0"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+                <div style={{fontSize:13,fontWeight:800,color:"#3A4568",flex:1}}>🔁 정기 잠금 규칙 (매주 반복)</div>
+                <button onClick={()=>setShowRecurringAdd(true)}
+                  style={{background:C.navy,color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",
+                    cursor:"pointer",fontSize:11,fontWeight:700}}>
+                  + 규칙 추가
+                </button>
+              </div>
+              {recurringLocks.length===0 && (
+                <div style={{fontSize:12,color:C.light}}>등록된 정기 잠금 규칙이 없어요</div>
+              )}
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {recurringLocks.map(rule=>{
+                  const stName = rule.studio_id==="ALL" ? "전체" : (studioSettings.find(s=>s.id===rule.studio_id)?.name || rule.studio_id);
+                  return (
+                    <div key={rule.id} style={{background:"#fff",borderRadius:9,padding:"9px 12px",
+                      display:"flex",alignItems:"center",gap:8,border:"1px solid #DCE1EE"}}>
+                      <div style={{flex:1,fontSize:12,color:C.tx}}>
+                        <b>{stName}</b> · {rule.days.map(d=>DAY[d]).join("")} · {rule.start_time}~{rule.end_time} · {rule.reason}
+                      </div>
+                      <button onClick={()=>{
+                        if(window.confirm(`"${stName} · ${rule.days.map(d=>DAY[d]).join("")} · ${rule.reason}" 정기 잠금 규칙을 삭제할까요?`)) onDelRecurring(rule.id);
+                      }}
+                        style={{background:"#FEE2E2",color:C.err,border:"none",borderRadius:7,padding:"5px 10px",
+                          cursor:"pointer",fontWeight:700,fontSize:11,flexShrink:0}}>
+                        삭제
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -1284,7 +1492,7 @@ export default function App() {
             {studioSettings.map(s=>{
               const sRes   = dateRes.filter(r=>r.studio_id===s.id);
               const sLocks = dateLocks.filter(l=>l.studio_id===s.id||l.studio_id==="ALL");
-              const fixCount = SLOTS.filter(slot=>fixedLock(s.id,date,slot)).length;
+              const fixCount = SLOTS.filter(slot=>fixedLock(recurringLocks,s.id,date,slot)).length;
               return (
                 <div key={s.id} style={{background:C.card,borderRadius:14,padding:16,marginBottom:12,border:`1.5px solid ${s.color}33`}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
