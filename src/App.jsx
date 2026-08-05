@@ -560,6 +560,7 @@ function TimeGrid({ studio, studios, date, res, locks, recurringLocks, isAdmin, 
   const [sel2, setSel2] = useState(null);
   const [sheet, setSheet] = useState(null); // null | "book" | "lock"
   const [done,  setDone]  = useState(null); // completed booking
+  const [confirmRecurId, setConfirmRecurId] = useState(null); // 삭제 확인 중인 정기잠금 id (브라우저 confirm() 대신 자체 확인 UI)
 
   const clearSel = () => { setSel1(null); setSel2(null); };
 
@@ -655,11 +656,21 @@ function TimeGrid({ studio, studios, date, res, locks, recurringLocks, isAdmin, 
               {/* 관리자: 정기(반복) 잠금 — 요일마다 반복 적용되는 규칙이라, 삭제하면 해당 규칙 전체가 없어짐 */}
               {isAdmin && fix && (
                 <div style={{paddingLeft:52,display:"flex",gap:4,flexWrap:"wrap",marginTop:2,marginBottom:2}}>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:4,background:"#EEF0F6",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#5A6480"}}>
-                    <span style={{color:"#7A85A8"}}>🔁 정기 {fix.reason}</span>
-                    <button onClick={e=>{e.stopPropagation(); if(window.confirm(`매주 반복되는 "${fix.reason}" 잠금 규칙을 완전히 삭제할까요? (이 요일 전체에서 사라져요)`)) onDelRecurring(fix.id);}}
-                      style={{background:"none",border:"none",cursor:"pointer",color:C.err,fontSize:14,padding:0,lineHeight:1,marginLeft:2}}>×</button>
-                  </span>
+                  {confirmRecurId===fix.id ? (
+                    <span style={{display:"inline-flex",alignItems:"center",gap:6,background:"#FEE2E2",borderRadius:6,padding:"3px 8px",fontSize:11}}>
+                      <span style={{color:C.err,fontWeight:700}}>이 규칙 삭제할까요?</span>
+                      <button onClick={e=>{e.stopPropagation(); onDelRecurring(fix.id); setConfirmRecurId(null);}}
+                        style={{background:C.err,color:"#fff",border:"none",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,fontWeight:700}}>삭제</button>
+                      <button onClick={e=>{e.stopPropagation(); setConfirmRecurId(null);}}
+                        style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:C.mid}}>취소</button>
+                    </span>
+                  ) : (
+                    <span style={{display:"inline-flex",alignItems:"center",gap:4,background:"#EEF0F6",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#5A6480"}}>
+                      <span style={{color:"#7A85A8"}}>🔁 정기 {fix.reason}</span>
+                      <button onClick={e=>{e.stopPropagation(); setConfirmRecurId(fix.id);}}
+                        style={{background:"none",border:"none",cursor:"pointer",color:C.err,fontSize:14,padding:0,lineHeight:1,marginLeft:2}}>×</button>
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -940,6 +951,7 @@ export default function App() {
   const [showChgPw,    setShowChgPw]     = useState(false);
   const [showStudioEdit,setShowStudioEdit] = useState(false);
   const [showRecurringAdd, setShowRecurringAdd] = useState(false);
+  const [confirmDelRecurId, setConfirmDelRecurId] = useState(null); // 관리 탭 목록에서 삭제 확인 중인 규칙 id
   const [studioSettings,setStudioSettings] = useState(STUDIOS); // 커스텀 이름/좌석
   const [recurringLocks, setRecurringLocks] = useState(DEFAULT_RECURRING_LOCKS); // 정기(반복) 잠금 규칙
   const [date,  setDate]  = useState(today());
@@ -1460,13 +1472,26 @@ export default function App() {
                       <div style={{flex:1,fontSize:12,color:C.tx}}>
                         <b>{stName}</b> · {rule.days.map(d=>DAY[d]).join("")} · {rule.start_time}~{rule.end_time} · {rule.reason}
                       </div>
-                      <button onClick={()=>{
-                        if(window.confirm(`"${stName} · ${rule.days.map(d=>DAY[d]).join("")} · ${rule.reason}" 정기 잠금 규칙을 삭제할까요?`)) onDelRecurring(rule.id);
-                      }}
-                        style={{background:"#FEE2E2",color:C.err,border:"none",borderRadius:7,padding:"5px 10px",
-                          cursor:"pointer",fontWeight:700,fontSize:11,flexShrink:0}}>
-                        삭제
-                      </button>
+                      {confirmDelRecurId===rule.id ? (
+                        <div style={{display:"flex",gap:6,flexShrink:0}}>
+                          <button onClick={()=>{onDelRecurring(rule.id); setConfirmDelRecurId(null);}}
+                            style={{background:C.err,color:"#fff",border:"none",borderRadius:7,padding:"5px 10px",
+                              cursor:"pointer",fontWeight:700,fontSize:11}}>
+                            확인
+                          </button>
+                          <button onClick={()=>setConfirmDelRecurId(null)}
+                            style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,padding:"5px 10px",
+                              cursor:"pointer",fontWeight:700,fontSize:11,color:C.mid}}>
+                            취소
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={()=>setConfirmDelRecurId(rule.id)}
+                          style={{background:"#FEE2E2",color:C.err,border:"none",borderRadius:7,padding:"5px 10px",
+                            cursor:"pointer",fontWeight:700,fontSize:11,flexShrink:0}}>
+                          삭제
+                        </button>
+                      )}
                     </div>
                   );
                 })}
