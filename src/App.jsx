@@ -236,6 +236,49 @@ const ruleLocks = (weekly, date) => (weekly || [])
   .map(r => ({ id: `rule:${r.id}:${date}`, rule_id: r.id, rule: true, date, studio_id: r.studio_id, start_time: r.start, end_time: r.end, reason: r.reason }));
 
 // ═════════════════════════════════════════════
+//  예약 처리 핵심 (오버부킹 방지)
+//  1) 서버의 최신 설정·예약·잠금으로 사전 점검
+//  2) 저장 3) 저장 직후와 잠시 뒤(settleMs)에 서버를 다시 읽어, 정원 초과·한 사람 두 자리가 되면
+//     id가 나중인 쪽이 스스로 취소 (동시에 눌러도 두 기기가 같은 결론)
+// ═════════════════════════════════════════════
+const sameSpan = (a, b) => a.start_time < b.end_time && a.end_time > b.start_time;
+const placeBooking = async (payload, settleMs = 1200) => {
+  const [c, d] = await Promise.all([readConfig(), fetchDay(payload.date)]);
+  if (!c.ok || !d) return { ok: false, msg: "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요." };
+  const cfg = normalizeCfg(c.cfg || makeDefaultCfg());
+  const room = cfg.rooms[payload.studio_id];
+  if (!room) return { ok: false, msg: "존재하지 않는 자습실이에요." };
+  if (!room.open || room.seats <= 0) return { ok: false, msg: "지금은 운영하지 않는 자습실이에요." };
+  if (payload.date < today() || payload.date > getAdminDates()[13]) return { ok: false, msg: "예약할 수 없는 날짜예요." };
+  const slots = slotsIn(payload.start_time, payload.end_time);
+  if (!slots.length) return { ok: false, msg: "시간을 다시 선택해주세요." };
+  if (slots.some(sl => isPastSlot(payload.date, sl))) return { ok: false, msg: "이미 지난 시간은 예약할 수 없어요. 다른 시간을 선택해주세요." };
+  const me = normName(payload.user_name);
+  const dupMsg = "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요.";
+  if (d.res.some(r => normName(r.user_name) === me && sameSpan(r, payload))) return { ok: false, msg: dupMsg };
+  const locks = [...d.locks, ...ruleLocks(cfg.weekly, payload.date)];
+  for (const sl of slots) {
+    if (manualLock(locks, payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
+    if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
+  }
+  const ins = await req("POST", "studio_reservations", payload, "return=minimal");
+  if (!ins.ok) return { ok: false, msg: `예약 저장에 실패했어요 (코드 ${ins.status || "연결 실패"}). 관리자에게 알려주세요.` };
+
+  const giveUp = async msg => {
+    const rm = await removeRow("studio_reservations", payload.id);
+    return { ok: false, msg: rm.ok ? msg : `${msg} (자동 취소에 실패했어요. 관리자에게 알려주세요)` };
+  };
+  for (let round = 0; round < 2; round++) {
+    if (round > 0) await new Promise(r => setTimeout(r, settleMs));
+    const after = await fetchDay(payload.date);
+    if (!after || !after.res.some(r => r.id === payload.id)) return { ok: false, msg: "예약이 서버에서 확인되지 않았어요. '내 예약'에서 확인해주세요." };
+    if (overbooked(after.res, payload, room.seats)) return giveUp("동시에 예약이 겹쳐 마감됐어요. 다른 시간을 선택해주세요.");
+    if (after.res.some(r => r.id < payload.id && normName(r.user_name) === me && sameSpan(r, payload))) return giveUp("한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요.");
+  }
+  return { ok: true };
+};
+
+// ═════════════════════════════════════════════
 //  랭킹 계산 (예약해서 이용이 끝난 시간 기준)
 // ═════════════════════════════════════════════
 const toMin    = t => { const [h, m] = String(t || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
@@ -1053,6 +1096,7 @@ function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancel
       {studios.map(s => {
         const sRes = res.filter(r => r.studio_id === s.id);
         const sLocks = locks.filter(l => l.studio_id === s.id || l.studio_id === "ALL");
+        const overSlots = s.runs ? SLOTS.filter(sl => slotBooked(sRes, s.id, sl) > s.seats) : [];
         return (
           <div key={s.id} style={{ background: C.card, borderRadius: 14, padding: 14, marginBottom: 10, border: `1.5px solid ${s.color}33` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -1062,6 +1106,11 @@ function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancel
               {sRes.length > 0 && <Tag c={s.color}>{sRes.length}건 예약</Tag>}
               <button onClick={() => setLockFor(s)} style={{ ...smallBtn, marginLeft: "auto", background: "#fff", border: `1px solid ${C.err}55` }}>🔒 잠금 추가</button>
             </div>
+            {overSlots.length > 0 && (
+              <div style={{ background: "#FEF2F2", border: `1.5px solid ${C.err}`, borderRadius: 8, padding: "8px 12px", marginBottom: 6, fontSize: 12, color: C.err, fontWeight: 700 }}>
+                ⚠️ 정원({s.seats}석) 초과 시간이 있어요: {overSlots.slice(0, 6).join(", ")}{overSlots.length > 6 ? " …" : ""} · 아래 예약 중 일부를 취소해주세요
+              </div>
+            )}
             {sRes.length === 0 && sLocks.length === 0 && <div style={{ fontSize: 12, color: C.light }}>예약·잠금 없음</div>}
             {sRes.map(r => (
               <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, background: s.bg, borderRadius: 8, padding: "8px 12px", marginBottom: 5 }}>
@@ -1299,36 +1348,9 @@ export default function App() {
 
   // ── 예약: 서버에서 최신 설정·예약·잠금을 다시 확인하고, 저장 후에도 검증 ──
   const onBook = useCallback(async payload => {
-    const [c, d] = await Promise.all([readConfig(), fetchDay(payload.date)]);
-    if (!c.ok || !d) return { ok: false, msg: "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요." };
-    const room = normalizeCfg(c.cfg || makeDefaultCfg()).rooms[payload.studio_id];
-    if (!room.open || room.seats <= 0) return { ok: false, msg: "지금은 운영하지 않는 자습실이에요." };
-    if (payload.date < today() || payload.date > getAdminDates()[13]) return { ok: false, msg: "예약할 수 없는 날짜예요." };
-    if (slotsIn(payload.start_time, payload.end_time).some(sl => isPastSlot(payload.date, sl))) return { ok: false, msg: "이미 지난 시간은 예약할 수 없어요. 다른 시간을 선택해주세요." };
-    const me = normName(payload.user_name);
-    if (d.res.some(r => normName(r.user_name) === me && r.start_time < payload.end_time && r.end_time > payload.start_time))
-      return { ok: false, msg: "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요." };
-    for (const sl of slotsIn(payload.start_time, payload.end_time)) {
-      if (manualLock([...d.locks, ...ruleLocks(normalizeCfg(c.cfg || makeDefaultCfg()).weekly, payload.date)], payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
-      if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
-    }
-    const ins = await req("POST", "studio_reservations", payload, "return=minimal");
-    if (!ins.ok) return { ok: false, msg: `예약 저장에 실패했어요 (코드 ${ins.status || "연결 실패"}). 관리자에게 알려주세요.` };
-    const after = await fetchDay(payload.date);
-    if (!after || !after.res.some(r => r.id === payload.id)) return { ok: false, msg: "예약이 서버에서 확인되지 않았어요. '내 예약'에서 확인해주세요." };
-    if (overbooked(after.res, payload, room.seats)) {
-      await removeRow("studio_reservations", payload.id);
-      loadDay(payload.date, true);
-      return { ok: false, msg: "동시에 예약이 겹쳐 마감됐어요. 다른 시간을 선택해주세요." };
-    }
-    // 같은 사람이 두 기기에서 동시에 눌러 한 사람 두 자리가 된 경우: id가 나중인 쪽이 스스로 취소
-    if (after.res.some(r => r.id < payload.id && normName(r.user_name) === me && r.start_time < payload.end_time && r.end_time > payload.start_time)) {
-      await removeRow("studio_reservations", payload.id);
-      loadDay(payload.date, true);
-      return { ok: false, msg: "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요." };
-    }
+    const r = await placeBooking(payload);
     loadDay(payload.date, true);
-    return { ok: true };
+    return r;
   }, [loadDay]);
 
   const cancelRes = useCallback(async id => {
