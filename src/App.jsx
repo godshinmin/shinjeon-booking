@@ -96,6 +96,7 @@ const makeDefaultCfg = () => ({
   rev: 0,
   info: DEFAULT_INFO,
   showRanking: true,
+  rankingSince: "",
   weekly: [],
   dday: { label: "건축사 시험", date: "" },
   notice: { text: "", at: "" },
@@ -137,6 +138,7 @@ const normalizeCfg = (v) => {
     rev: Number(v?.rev) || 0,
     info: typeof v?.info === "string" ? v.info.slice(0, 600) : DEFAULT_INFO,
     showRanking: v?.showRanking === undefined ? true : !!v.showRanking,
+    rankingSince: typeof v?.rankingSince === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.rankingSince) ? v.rankingSince : "",
     weekly: normalizeWeekly(v?.weekly),
     dday: {
       label: typeof v?.dday?.label === "string" && v.dday.label.trim() ? v.dday.label.trim().slice(0, 20) : "건축사 시험",
@@ -178,10 +180,10 @@ const C = {
   ok: "#059669", warn: "#D97706", err: "#DC2626",
 };
 const DAY = ["일", "월", "화", "수", "목", "금", "토"];
-const CLASSES = [
-  ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i) + "반"),
-  "온라인", "무한모의고사반", "기타",
-];
+// 담임 건축사 이름 정리 ("담임 홍길동 건축사" → "홍길동") / 표시용 태그
+const cleanTutor = v => String(v || "").replace(/^\s*담임\s*/, "").replace(/\s*건축사\s*$/, "").replace(/\s+/g, " ").trim().slice(0, 10);
+const tutTag = c => (c ? ` (담임 ${c})` : "");
+const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); return toStr(d); };
 
 const SLOTS = [];
 for (let h = 9; h <= 21; h++) {
@@ -253,9 +255,10 @@ const buildRanking = (rows, todayStr, nowStr) => {
     if (r.date > todayStr || (r.date === todayStr && r.end_time > nowStr)) continue; // 아직 안 끝난 예약 제외
     const s = toMin(r.start_time), e = toMin(r.end_time);
     if (!(e > s)) continue;
-    const key = `${name}|${r.user_class || ""}`;
-    if (!people.has(key)) people.set(key, { key, name, cls: r.user_class || "", days: new Map() });
+    const key = name;
+    if (!people.has(key)) people.set(key, { key, name, cls: "", days: new Map() });
     const p = people.get(key);
+    if (r.user_class) p.cls = r.user_class;
     if (!p.days.has(r.date)) p.days.set(r.date, []);
     p.days.get(r.date).push([s, e]);
   }
@@ -357,7 +360,7 @@ function TextCommit({ value, onCommit, multiline, maxLength, style }) {
 // ═════════════════════════════════════════════
 function BookSheet({ studio, date, s1, s2, onClose, onSubmit, onSuccess }) {
   const [name, setName] = useState(() => { try { return localStorage.getItem("sj_last_name") || ""; } catch { return ""; } });
-  const [cls, setCls]   = useState(() => { try { return localStorage.getItem("sj_last_cls") || "A반"; } catch { return "A반"; } });
+  const [tutor, setTutor] = useState(() => { try { return localStorage.getItem("sj_last_tutor") || ""; } catch { return ""; } });
   const [pw, setPw]     = useState("");
   const [err, setErr]   = useState("");
   const [busy, setBusy] = useState(false);
@@ -368,11 +371,12 @@ function BookSheet({ studio, date, s1, s2, onClose, onSubmit, onSuccess }) {
     if (!name.trim()) { setErr("이름을 입력해주세요"); return; }
     if (!/^[0-9]{4}$/.test(pw)) { setErr("비밀번호는 숫자 4자리로 입력해주세요"); return; }
     setBusy(true); setErr("");
-    const payload = { id: uid(), date, studio_id: studio.id, start_time: s1, end_time: endTime, user_name: name.trim(), user_class: cls, user_pw: pw };
+    const nm = name.replace(/\s+/g, " ").trim();
+    const payload = { id: uid(), date, studio_id: studio.id, start_time: s1, end_time: endTime, user_name: nm, user_class: cleanTutor(tutor), user_pw: pw };
     const r = await onSubmit(payload);
     setBusy(false);
     if (r.ok) {
-      try { localStorage.setItem("sj_last_name", name.trim()); localStorage.setItem("sj_last_cls", cls); } catch {}
+      try { localStorage.setItem("sj_last_name", nm); localStorage.setItem("sj_last_tutor", cleanTutor(tutor)); } catch {}
       onSuccess(payload);
     } else setErr(r.msg);
   };
@@ -390,10 +394,8 @@ function BookSheet({ studio, date, s1, s2, onClose, onSubmit, onSuccess }) {
           <input value={name} onChange={e => setName(e.target.value)} placeholder="홍길동" autoFocus style={inputStyle} />
         </div>
         <div>
-          <label style={labelStyle}>반 *</label>
-          <select value={cls} onChange={e => setCls(e.target.value)} style={{ ...inputStyle, background: C.card }}>
-            {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+          <label style={labelStyle}>담임 건축사 (선택)</label>
+          <input value={tutor} onChange={e => setTutor(e.target.value)} maxLength={14} placeholder="이름만 입력 (예: 홍길동)" style={inputStyle} />
         </div>
         <div>
           <label style={labelStyle}>예약 비밀번호 (숫자 4자리) *</label>
@@ -426,7 +428,7 @@ function DoneSheet({ booking, studio, info, onClose }) {
           <b style={{ color: studio.color }}>{studio.name}</b><br />
           📅 {fmt(booking.date)} ({DAY[dow(booking.date)]})<br />
           🕐 {booking.start_time} ~ {booking.end_time}<br />
-          👤 {booking.user_name} ({booking.user_class})
+          👤 {booking.user_name}{tutTag(booking.user_class)}
         </div>
         {info && <div style={{ background: "#FFF8E8", borderRadius: 12, padding: 14, fontSize: 11, color: C.mid, textAlign: "left", lineHeight: 1.9, marginBottom: 20 }}>
           {info.split("\n").map((l, i) => <div key={i}>{l}</div>)}
@@ -588,7 +590,7 @@ function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, on
               </div>
               {who.length > 0 && (
                 <div style={{ paddingLeft: 52, display: "flex", gap: 4, flexWrap: "wrap", margin: "2px 0" }}>
-                  {who.map(r => <span key={r.id} style={{ background: studio.bg, borderRadius: 6, padding: "2px 8px", fontSize: 11, color: studio.color }}>{r.user_name}({r.user_class})</span>)}
+                  {who.map(r => <span key={r.id} style={{ background: studio.bg, borderRadius: 6, padding: "2px 8px", fontSize: 11, color: studio.color }}>{r.user_name}{tutTag(r.user_class)}</span>)}
                 </div>
               )}
             </div>
@@ -652,7 +654,7 @@ function CancelSheet({ bookings, studios, onClose, onCancelOne, onDone }) {
   );
 }
 
-function RankingTab() {
+function RankingTab({ since }) {
   const [period, setPeriod] = useState("week");
   const [rows, setRows] = useState(null);
   const [fail, setFail] = useState(false);
@@ -661,13 +663,15 @@ function RankingTab() {
 
   const load = useCallback(async () => {
     const id = ++reqId.current;
-    const from = period === "week" ? weekStart() : period === "month" ? monthStart() : "2000-01-01";
+    const base = period === "week" ? weekStart() : period === "month" ? monthStart() : "2000-01-01";
+    const from = since && since > base ? since : base;
+    if (from > today()) { setFail(false); setRows([]); return; }
     const data = await fetchRankRows(from, today());
     if (id !== reqId.current) return;
     if (data === null) { setFail(true); return; }
     setFail(false);
     setRows(buildRanking(data, today(), nowHM()));
-  }, [period]);
+  }, [period, since]);
 
   useEffect(() => { setRows(null); load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
 
@@ -680,7 +684,7 @@ function RankingTab() {
   return (
     <div>
       <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 4 }}>🏆 공부왕 랭킹</div>
-      <div style={{ fontSize: 11, color: C.light, marginBottom: 12 }}>예약해서 이용을 마친 시간 기준이에요 (출석 체크가 아니라 예약 기준)</div>
+      <div style={{ fontSize: 11, color: C.light, marginBottom: 12 }}>예약해서 이용을 마친 시간 기준이에요 (출석 체크가 아니라 예약 기준){since && ` · ${fmt(since)}부터 집계`}</div>
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
         {[["week", "이번 주"], ["month", "이번 달"], ["all", "전체"]].map(([k, l]) => (
           <button key={k} onClick={() => setPeriod(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13,
@@ -697,7 +701,7 @@ function RankingTab() {
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}{p.cls && <span style={{ fontWeight: 400, fontSize: 11, color: C.light }}> · {p.cls}</span>}</div>
+                  <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}{p.cls && <span style={{ fontWeight: 400, fontSize: 11, color: C.light }}> · 담임 {p.cls}</span>}</div>
                   <div style={{ fontSize: 11, color: C.mid }}>{p.days}일 이용</div>
                 </div>
                 <div style={{ fontWeight: 900, color: C.blue, fontSize: 15 }}>{fmtDur(p.minutes)}</div>
@@ -714,7 +718,7 @@ function RankingTab() {
           <div style={{ fontSize: 12, fontWeight: 800, color: C.mid, marginBottom: 8 }}>내 순위 찾기</div>
           <input value={me} onChange={e => setMe(e.target.value)} placeholder="이름 입력" style={{ width: "100%", padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${C.border}`, fontSize: 14, boxSizing: "border-box" }} />
           {q && mine.length === 0 && <div style={{ fontSize: 12, color: C.light, marginTop: 8 }}>이 기간에 이용 완료한 기록이 없어요</div>}
-          {mine.map(p => <div key={p.key} style={{ fontSize: 13, color: C.navy, marginTop: 8, fontWeight: 700 }}>{p.name}{p.cls && ` (${p.cls})`} — {p.rank}등 · {fmtDur(p.minutes)} · {p.days}일</div>)}
+          {mine.map(p => <div key={p.key} style={{ fontSize: 13, color: C.navy, marginTop: 8, fontWeight: 700 }}>{p.name}{tutTag(p.cls)} — {p.rank}등 · {fmtDur(p.minutes)} · {p.days}일</div>)}
         </div>
       )}
     </div>
@@ -765,7 +769,7 @@ function MyTab({ studios, onCancelRes }) {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 800, fontSize: 14, color: st.color }}>{st.name}</div>
                   <div style={{ fontSize: 13, color: C.mid, marginTop: 2 }}>{fmt(r.date)} ({DAY[dow(r.date)]}) · <b>{r.start_time} ~ {r.end_time}</b></div>
-                  <div style={{ fontSize: 11, color: C.light, marginTop: 2 }}>{r.user_class}</div>
+                  <div style={{ fontSize: 11, color: C.light, marginTop: 2 }}>{r.user_class ? `담임 ${r.user_class}` : ""}</div>
                 </div>
                 <button onClick={() => setCancelList([r])} style={{ background: "#FEE2E2", color: C.err, border: "none", borderRadius: 8, padding: "7px 10px", cursor: "pointer", fontWeight: 700, fontSize: 11 }}>취소</button>
               </div>
@@ -939,6 +943,16 @@ function BoardSettings({ cfg, onChange }) {
       <label style={labelStyle}>💬 대표 글 (목표·응원 메시지, 비우면 숨김)</label>
       <TextCommit multiline value={cfg.message.text} maxLength={500} style={box} onCommit={v => onChange(c => ({ ...c, message: { ...c.message, text: v } }))} />
       <div style={{ fontSize: 10, color: C.light, marginTop: 4 }}>입력창 밖을 터치하면 저장돼요 · 최대 500자</div>
+
+      <div style={{ marginTop: 16, background: C.bg, borderRadius: 12, padding: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: C.navy, marginBottom: 4 }}>🏆 랭킹 초기화</div>
+        <div style={{ fontSize: 11, color: C.light, marginBottom: 10, lineHeight: 1.6 }}>
+          {cfg.rankingSince ? `현재 ${fmt(cfg.rankingSince)}부터 집계 중이에요. ` : "지금은 전체 기록을 집계해요. "}
+          누르면 내일부터 새로 집계하고, 이전 기록은 랭킹에서 빠져요. (예약 자료 자체는 지워지지 않아요)
+        </div>
+        <ConfirmBtn label="랭킹 초기화" onConfirm={() => onChange(c => ({ ...c, rankingSince: tomorrow() }))}
+          style={{ border: "none", borderRadius: 9, padding: "10px 16px", cursor: "pointer", fontWeight: 800, fontSize: 12, background: C.err, color: "#fff" }} />
+      </div>
     </div>
   );
 }
@@ -1034,7 +1048,7 @@ function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancel
             {sRes.map(r => (
               <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, background: s.bg, borderRadius: 8, padding: "8px 12px", marginBottom: 5 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: s.color, width: 84 }}>{r.start_time}~{r.end_time}</span>
-                <span style={{ flex: 1, fontSize: 13, color: C.tx, fontWeight: 600 }}>{r.user_name} <span style={{ fontSize: 11, color: C.light }}>({r.user_class})</span></span>
+                <span style={{ flex: 1, fontSize: 13, color: C.tx, fontWeight: 600 }}>{r.user_name} <span style={{ fontSize: 11, color: C.light }}>{tutTag(r.user_class).trim()}</span></span>
                 <ConfirmBtn label="취소" onConfirm={() => onCancelRes(r.id)} style={smallBtn} />
               </div>
             ))}
@@ -1081,7 +1095,7 @@ function Diagnostics() {
     add("잠금 삭제", await req("DELETE", `studio_locks?id=eq.${lid}`, null, "return=representation"), true);
     const rid = `diag-${Date.now().toString(36)}r`;
     add("예약 읽기", await req("GET", "studio_reservations?select=id&limit=1"));
-    add("예약 추가", await req("POST", "studio_reservations", { id: rid, date: "1999-01-01", studio_id: "A", start_time: "09:00", end_time: "10:00", user_name: "diag", user_class: "A반", user_pw: "0000" }, "return=minimal"));
+    add("예약 추가", await req("POST", "studio_reservations", { id: rid, date: "1999-01-01", studio_id: "A", start_time: "09:00", end_time: "10:00", user_name: "diag", user_class: "", user_pw: "0000" }, "return=minimal"));
     add("예약 삭제", await req("DELETE", `studio_reservations?id=eq.${rid}`, null, "return=representation"), true);
     setRows(out); setBusy(false);
   };
@@ -1257,8 +1271,8 @@ export default function App() {
     if (payload.date < today() || payload.date > getAdminDates()[13]) return { ok: false, msg: "예약할 수 없는 날짜예요." };
     if (slotsIn(payload.start_time, payload.end_time).some(sl => isPastSlot(payload.date, sl))) return { ok: false, msg: "이미 지난 시간은 예약할 수 없어요. 다른 시간을 선택해주세요." };
     const me = normName(payload.user_name);
-    if (d.res.some(r => normName(r.user_name) === me && r.user_class === payload.user_class && r.start_time < payload.end_time && r.end_time > payload.start_time))
-      return { ok: false, msg: "같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요." };
+    if (d.res.some(r => normName(r.user_name) === me && r.start_time < payload.end_time && r.end_time > payload.start_time))
+      return { ok: false, msg: "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요." };
     for (const sl of slotsIn(payload.start_time, payload.end_time)) {
       if (manualLock([...d.locks, ...ruleLocks(normalizeCfg(c.cfg || makeDefaultCfg()).weekly, payload.date)], payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
       if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
@@ -1271,6 +1285,12 @@ export default function App() {
       await removeRow("studio_reservations", payload.id);
       loadDay(payload.date, true);
       return { ok: false, msg: "동시에 예약이 겹쳐 마감됐어요. 다른 시간을 선택해주세요." };
+    }
+    // 같은 사람이 두 기기에서 동시에 눌러 한 사람 두 자리가 된 경우: id가 나중인 쪽이 스스로 취소
+    if (after.res.some(r => r.id < payload.id && normName(r.user_name) === me && r.start_time < payload.end_time && r.end_time > payload.start_time)) {
+      await removeRow("studio_reservations", payload.id);
+      loadDay(payload.date, true);
+      return { ok: false, msg: "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요." };
     }
     loadDay(payload.date, true);
     return { ok: true };
@@ -1476,7 +1496,7 @@ export default function App() {
 
         {/* ───── 내 예약 탭 ───── */}
         {tab === "mine" && <MyTab studios={studios} onCancelRes={cancelRes} />}
-        {tab === "rank" && (admin || cfg.showRanking) && <RankingTab />}
+        {tab === "rank" && (admin || cfg.showRanking) && <RankingTab since={cfg.rankingSince} />}
 
         {/* ───── 관리 탭 ───── */}
         {tab === "admin" && (admin ? (
