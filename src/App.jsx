@@ -97,6 +97,9 @@ const makeDefaultCfg = () => ({
   info: DEFAULT_INFO,
   showRanking: true,
   weekly: [],
+  dday: { label: "건축사 시험", date: "" },
+  notice: { text: "", at: "" },
+  message: { title: "대표의 한마디", text: "" },
   rooms: Object.fromEntries(STUDIO_META.map(m => [m.id, { name: `스튜디오 ${m.id}`, open: true, seats: MAX_SEATS }])),
 });
 
@@ -135,6 +138,18 @@ const normalizeCfg = (v) => {
     info: typeof v?.info === "string" ? v.info.slice(0, 600) : DEFAULT_INFO,
     showRanking: v?.showRanking === undefined ? true : !!v.showRanking,
     weekly: normalizeWeekly(v?.weekly),
+    dday: {
+      label: typeof v?.dday?.label === "string" && v.dday.label.trim() ? v.dday.label.trim().slice(0, 20) : "건축사 시험",
+      date: typeof v?.dday?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.dday.date) ? v.dday.date : "",
+    },
+    notice: {
+      text: typeof v?.notice?.text === "string" ? v.notice.text.slice(0, 500) : "",
+      at: typeof v?.notice?.at === "string" ? v.notice.at.slice(0, 10) : "",
+    },
+    message: {
+      title: typeof v?.message?.title === "string" && v.message.title.trim() ? v.message.title.trim().slice(0, 20) : "대표의 한마디",
+      text: typeof v?.message?.text === "string" ? v.message.text.slice(0, 500) : "",
+    },
     rooms,
   };
 };
@@ -184,10 +199,14 @@ const hm    = t => String(t || "").slice(0, 5);
 const normT = r => ({ ...r, start_time: hm(r.start_time), end_time: hm(r.end_time) });
 const clock = d => d ? d.toLocaleTimeString("ko-KR", { hour12: false }) : "";
 
-// 학생: 오늘은 항상, 내일부터는 오전 9시 이후 오픈 / 관리자: 14일
-const isOpenDate = ds => ds === today() || new Date().getHours() >= 9;
+// 학생: 오늘~3일 뒤까지 시간 제한 없이 항상 예약 가능 / 관리자: 14일
+const isOpenDate = () => true;
 const getDates      = () => Array.from({ length: 4 },  (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return toStr(d); });
 const getAdminDates = () => Array.from({ length: 14 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return toStr(d); });
+
+// 이미 지나간 시간인지 (지난 시간은 예약 불가 → 랭킹 시간 조작·실수 방지)
+const isPastSlot = (date, slot) => date < today() || (date === today() && add30(slot) <= nowHM());
+const daysUntil = ds => Math.round((new Date(ds + "T00:00:00") - new Date(today() + "T00:00:00")) / 86400000);
 
 const slotsIn = (s, e) => SLOTS.filter(x => x >= s && x < e);
 const overlaps = (r, slot) => r.start_time < add30(slot) && r.end_time > slot;
@@ -510,10 +529,10 @@ function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, on
   const clearSel = () => { setSel1(null); setSel2(null); };
 
   const click = slot => {
-    if (!studio.runs || lockOf(slot) || full(slot)) return;
+    if (!studio.runs || lockOf(slot) || full(slot) || isPastSlot(date, slot)) return;
     if (!sel1 || slot < sel1) { setSel1(slot); setSel2(slot); return; }
     const range = SLOTS.filter(s => s >= sel1 && s <= slot);
-    if (range.some(s => lockOf(s) || full(s))) { setSel1(slot); setSel2(slot); } // 중간에 잠금/마감이 있으면 새로 시작
+    if (range.some(s => lockOf(s) || full(s) || isPastSlot(date, s))) { setSel1(slot); setSel2(slot); } // 중간에 잠금/마감이 있으면 새로 시작
     else setSel2(slot);
   };
   const inRange = s => sel1 && sel2 && s >= sel1 && s <= sel2;
@@ -551,14 +570,16 @@ function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, on
           const cnt = slotBooked(res, studio.id, slot);
           const ss = slotStyle(cnt, studio.seats, lk);
           const sel = inRange(slot);
+          const past = isPastSlot(date, slot);
           const who = isAdmin ? res.filter(r => r.studio_id === studio.id && overlaps(r, slot)) : [];
           return (
             <div key={slot}>
               <div onClick={() => click(slot)} style={{
+                opacity: past ? 0.45 : 1,
                 display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 9,
                 background: sel ? studio.color : ss.bg,
                 border: `1.5px solid ${sel ? studio.color : lk ? "#E2E8F0" : ss.tc + "44"}`,
-                cursor: lk || full(slot) ? "not-allowed" : "pointer", userSelect: "none" }}>
+                cursor: lk || full(slot) || past ? "not-allowed" : "pointer", userSelect: "none" }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: sel ? "#fff9" : C.light, width: 40, flexShrink: 0 }}>{slot}</span>
                 <div style={{ flex: 1, height: 5, background: sel ? "#fff4" : C.border, borderRadius: 99, overflow: "hidden" }}>
                   <div style={{ height: "100%", width: lk ? "100%" : `${Math.min((cnt / studio.seats) * 100, 100)}%`, background: sel ? "#fff" : lk ? "#C8D0E0" : ss.tc, borderRadius: 99 }} />
@@ -855,6 +876,73 @@ function RoomSettings({ cfg, onChange, sync, onRetry }) {
 // ═════════════════════════════════════════════
 //  관리자: 날짜별 예약·잠금 현황
 // ═════════════════════════════════════════════
+function HomeBoard({ cfg }) {
+  const dd = cfg.dday.date ? daysUntil(cfg.dday.date) : null;
+  const ddText = dd === null || dd < 0 ? null : dd === 0 ? "D-DAY" : `D-${dd}`;
+  const n = cfg.notice, m = cfg.message;
+  if (!ddText && !n.text && !m.text) return null;
+  const dt = cfg.dday.date ? new Date(cfg.dday.date + "T12:00:00") : null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+      {ddText && (
+        <div style={{ background: `linear-gradient(135deg, ${C.navy}, #2B3F66)`, borderRadius: 16, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{cfg.dday.label}</div>
+            <div style={{ color: "#fff9", fontSize: 11, marginTop: 2 }}>{dt && `${dt.getFullYear()}.${dt.getMonth() + 1}.${dt.getDate()} (${DAY[dt.getDay()]})`}</div>
+          </div>
+          <div style={{ color: "#fff", fontSize: 34, fontWeight: 900, letterSpacing: -1 }}>{ddText}</div>
+        </div>
+      )}
+      {n.text && (
+        <div style={{ background: "#FFF7E0", border: `1.5px solid ${C.accent}`, borderRadius: 14, padding: "13px 15px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 900, color: "#8A6A12" }}>📢 공지사항</span>
+            {n.at && <span style={{ fontSize: 10, color: "#A8893A" }}>{fmt(n.at)} 등록</span>}
+          </div>
+          <div style={{ fontSize: 13, color: C.tx, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{n.text}</div>
+        </div>
+      )}
+      {m.text && (
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${C.blue}`, borderRadius: 14, padding: "13px 15px" }}>
+          <div style={{ fontSize: 12, fontWeight: 900, color: C.blue, marginBottom: 6 }}>💬 {m.title}</div>
+          <div style={{ fontSize: 13, color: C.tx, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BoardSettings({ cfg, onChange }) {
+  const box = { width: "100%", padding: 10, borderRadius: 10, border: `1.5px solid ${C.border}`, fontSize: 13, lineHeight: 1.7, outline: "none", boxSizing: "border-box", fontFamily: "inherit", resize: "vertical" };
+  const one = { ...box, lineHeight: 1.3, padding: "11px 12px", resize: "none" };
+  const dd = cfg.dday.date ? daysUntil(cfg.dday.date) : null;
+  return (
+    <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.border}`, marginBottom: 18 }}>
+      <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, marginBottom: 12 }}>📢 시험 D-day · 공지 · 대표 글</div>
+
+      <label style={labelStyle}>D-day 이름</label>
+      <TextCommit value={cfg.dday.label} maxLength={20} onCommit={v => onChange(c => ({ ...c, dday: { ...c.dday, label: v } }))} style={{ ...one, marginBottom: 10 }} />
+      <label style={labelStyle}>시험 날짜</label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+        <input type="date" value={cfg.dday.date} onChange={e => onChange(c => ({ ...c, dday: { ...c.dday, date: e.target.value } }))} style={{ ...one, flex: 1 }} />
+        {cfg.dday.date && <button onClick={() => onChange(c => ({ ...c, dday: { ...c.dday, date: "" } }))} style={{ border: `1px solid ${C.border}`, background: C.bg, borderRadius: 9, padding: "10px 12px", cursor: "pointer", fontSize: 12, color: C.mid }}>지우기</button>}
+      </div>
+      <div style={{ fontSize: 11, color: C.light, marginBottom: 14 }}>{dd === null ? "날짜를 정하면 학생 화면 맨 위에 D-day가 표시돼요" : dd < 0 ? "이미 지난 날짜라 학생 화면에는 표시되지 않아요" : `학생 화면에 ${dd === 0 ? "D-DAY" : "D-" + dd}로 표시돼요`}</div>
+
+      <label style={labelStyle}>📢 공지사항 (비우면 숨김)</label>
+      <TextCommit multiline value={cfg.notice.text} maxLength={500} style={box}
+        onCommit={v => onChange(c => ({ ...c, notice: { text: v, at: v ? (v === c.notice.text ? c.notice.at : today()) : "" } }))} />
+      <div style={{ fontSize: 10, color: C.light, margin: "4px 0 14px" }}>입력창 밖을 터치하면 저장돼요 · 최대 500자</div>
+
+      <label style={labelStyle}>💬 대표 글 제목</label>
+      <TextCommit value={cfg.message.title} maxLength={20} onCommit={v => onChange(c => ({ ...c, message: { ...c.message, title: v } }))} style={{ ...one, marginBottom: 10 }} />
+      <label style={labelStyle}>💬 대표 글 (목표·응원 메시지, 비우면 숨김)</label>
+      <TextCommit multiline value={cfg.message.text} maxLength={500} style={box} onCommit={v => onChange(c => ({ ...c, message: { ...c.message, text: v } }))} />
+      <div style={{ fontSize: 10, color: C.light, marginTop: 4 }}>입력창 밖을 터치하면 저장돼요 · 최대 500자</div>
+    </div>
+  );
+}
+
 function WeeklyRules({ cfg, onChange, studios }) {
   const [sid, setSid] = useState("A");
   const [days, setDays] = useState([]);
@@ -1151,6 +1239,13 @@ export default function App() {
   const dateRes = day.date === date ? day.res : [];
   const dateLocks = useMemo(() => [...(day.date === date ? day.locks : []), ...ruleLocks(cfg.weekly, date)], [day, date, cfg.weekly]);
 
+  // 자정이 지나거나 시간이 흐르면 화면을 갱신하고, 지난 날짜가 선택돼 있으면 오늘로 이동
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => { setTick(t => t + 1); setDate(d => (d < today() ? today() : d)); }, 30000);
+    return () => clearInterval(iv);
+  }, []);
+
   const failNotice = (label, r) => setNotice({ kind: "err", text: `${label} (코드 ${r.status || "연결 실패"}${r.blocked ? ", 권한 차단" : ""}). 관리 탭 › 서버 진단으로 원인을 확인해주세요.` });
 
   // ── 예약: 서버에서 최신 설정·예약·잠금을 다시 확인하고, 저장 후에도 검증 ──
@@ -1159,6 +1254,11 @@ export default function App() {
     if (!c.ok || !d) return { ok: false, msg: "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요." };
     const room = normalizeCfg(c.cfg || makeDefaultCfg()).rooms[payload.studio_id];
     if (!room.open || room.seats <= 0) return { ok: false, msg: "지금은 운영하지 않는 자습실이에요." };
+    if (payload.date < today() || payload.date > getAdminDates()[13]) return { ok: false, msg: "예약할 수 없는 날짜예요." };
+    if (slotsIn(payload.start_time, payload.end_time).some(sl => isPastSlot(payload.date, sl))) return { ok: false, msg: "이미 지난 시간은 예약할 수 없어요. 다른 시간을 선택해주세요." };
+    const me = normName(payload.user_name);
+    if (d.res.some(r => normName(r.user_name) === me && r.user_class === payload.user_class && r.start_time < payload.end_time && r.end_time > payload.start_time))
+      return { ok: false, msg: "같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요." };
     for (const sl of slotsIn(payload.start_time, payload.end_time)) {
       if (manualLock([...d.locks, ...ruleLocks(normalizeCfg(c.cfg || makeDefaultCfg()).weekly, payload.date)], payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
       if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
@@ -1306,6 +1406,8 @@ export default function App() {
             </div>
           )}
 
+          <HomeBoard cfg={cfg} />
+
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: C.mid, marginBottom: 8 }}>날짜{admin && " (관리자: 2주치)"}</div>
             <div style={{ display: "flex", gap: 7, overflowX: "auto", paddingBottom: 4 }}>
@@ -1321,7 +1423,7 @@ export default function App() {
                 );
               })}
             </div>
-            <div style={{ fontSize: 10, color: C.light, marginTop: 6 }}>💡 매일 오전 9시에 3일치 예약 오픈</div>
+            <div style={{ fontSize: 10, color: C.light, marginTop: 6 }}>💡 오늘부터 3일 뒤까지 언제든 예약할 수 있어요</div>
           </div>
 
           <div style={{ marginBottom: 16 }}>
@@ -1381,6 +1483,7 @@ export default function App() {
           <div>
             <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 12 }}>관리자 모드</div>
             <RoomSettings cfg={cfg} onChange={changeCfg} sync={cfgSync} onRetry={flushCfg} />
+            <BoardSettings cfg={cfg} onChange={changeCfg} />
             <WeeklyRules cfg={cfg} onChange={changeCfg} studios={studios} />
             <AdminDay date={date} setDate={setDate} dates={getAdminDates()} studios={studios} res={dateRes} locks={dateLocks} loading={dayLoading}
               onCancelRes={adminCancelRes} onDelLock={delLock} onAddLock={addLock} onSkipRule={skipRule} />
