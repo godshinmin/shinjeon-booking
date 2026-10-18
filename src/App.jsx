@@ -957,6 +957,24 @@ function BoardSettings({ cfg, onChange }) {
   );
 }
 
+function SaveBar({ sync, busy, onSave }) {
+  const saving = busy || sync.state === "saving";
+  const fail = sync.state === "fail";
+  return (
+    <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 150, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+      <div style={{ width: "100%", maxWidth: 520, background: C.card, borderTop: `2px solid ${fail ? C.err : C.accent}`, boxShadow: "0 -6px 20px #1A2A4522", padding: "10px 14px calc(10px + env(safe-area-inset-bottom))", display: "flex", alignItems: "center", gap: 12, pointerEvents: "auto", boxSizing: "border-box" }}>
+        <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700, color: saving ? C.warn : fail ? C.err : C.ok }}>
+          {saving ? "⏳ 서버에 저장 중…" : fail ? `❌ 저장 실패${sync.msg ? ` (${sync.msg})` : ""}` : `✅ 저장 확인됨 ${sync.at ? clock(sync.at) : ""}`}
+          <div style={{ fontWeight: 400, fontSize: 10, color: C.light, marginTop: 2 }}>바꾸는 즉시 자동 저장돼요 · 불안하면 눌러서 한 번 더 확인</div>
+        </div>
+        <button onClick={onSave} disabled={saving} style={{ flexShrink: 0, background: saving ? C.light : C.navy, color: "#fff", border: "none", borderRadius: 12, padding: "13px 22px", fontWeight: 900, fontSize: 15, cursor: saving ? "default" : "pointer" }}>
+          {saving ? "저장 중…" : "💾 저장"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function WeeklyRules({ cfg, onChange, studios }) {
   const [sid, setSid] = useState("A");
   const [days, setDays] = useState([]);
@@ -1168,7 +1186,7 @@ export default function App() {
   const pendingRef = useRef(false);
 
   const flushCfg = useCallback(async () => {
-    if (savingRef.current) { pendingRef.current = true; return; }
+    if (savingRef.current) { pendingRef.current = true; return false; }
     savingRef.current = true;
     setCfgSync(s => ({ ...s, state: "saving" }));
     try {
@@ -1182,10 +1200,27 @@ export default function App() {
       } while (pendingRef.current);
       dirtyRef.current = false;
       setCfgSync({ state: "ok", at: new Date(), msg: "" });
+      return true;
     } catch (e) {
       setCfgSync({ state: "fail", at: null, msg: e.message });
+      return false;
     } finally { savingRef.current = false; }
   }, []);
+
+  // 관리자 "저장" 버튼: 입력 중인 칸을 확정 → 서버에 저장 → 서버에서 다시 읽어 일치 확인
+  const [saveBusy, setSaveBusy] = useState(false);
+  const saveNow = async () => {
+    if (saveBusy) return;
+    setSaveBusy(true);
+    try { document.activeElement && document.activeElement.blur && document.activeElement.blur(); } catch {}
+    await new Promise(r => setTimeout(r, 150));
+    for (let i = 0; i < 40 && savingRef.current; i++) await new Promise(r => setTimeout(r, 150));
+    const ok = await flushCfg();
+    setSaveBusy(false);
+    setNotice(ok
+      ? { kind: "ok", text: "서버에 저장하고 다시 확인했어요. 학생 화면에도 반영돼요" }
+      : { kind: "err", text: "저장에 실패했어요. 관리 탭 아래 '서버 진단'을 확인하거나 다시 눌러주세요" });
+  };
 
   const changeCfg = useCallback(fn => {
     const base = fn(cfgRef.current);
@@ -1509,6 +1544,8 @@ export default function App() {
               onCancelRes={adminCancelRes} onDelLock={delLock} onAddLock={addLock} onSkipRule={skipRule} />
             <button onClick={() => setShowChgPw(true)} style={{ marginTop: 6, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", cursor: "pointer", fontSize: 12, color: C.mid, fontWeight: 600 }}>🔑 관리자 비밀번호 변경</button>
             <Diagnostics />
+            <div style={{ height: 90 }} />
+            <SaveBar sync={cfgSync} busy={saveBusy} onSave={saveNow} />
           </div>
         ) : (
           <div style={{ maxWidth: 360, margin: "0 auto", paddingTop: 20 }}>
