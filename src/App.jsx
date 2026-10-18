@@ -96,8 +96,28 @@ const makeDefaultCfg = () => ({
   rev: 0,
   info: DEFAULT_INFO,
   showRanking: true,
+  weekly: [],
   rooms: Object.fromEntries(STUDIO_META.map(m => [m.id, { name: `스튜디오 ${m.id}`, open: true, seats: MAX_SEATS }])),
 });
+
+// 매주 반복 잠금(정기 강의) 규칙: { id, studio_id, days:[0~6], start, end, reason, skip:[날짜] }
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const normalizeWeekly = (w) => {
+  if (!Array.isArray(w)) return [];
+  const out = [];
+  for (const r of w.slice(0, 60)) {
+    if (!r || typeof r.id !== "string") continue;
+    if (!["A", "B", "C", "D", "ALL"].includes(r.studio_id)) continue;
+    const days = [...new Set((Array.isArray(r.days) ? r.days : []).map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
+    if (!days.length || !HHMM.test(r.start) || !HHMM.test(r.end) || r.start >= r.end) continue;
+    out.push({
+      id: r.id.slice(0, 40), studio_id: r.studio_id, days, start: r.start, end: r.end,
+      reason: (typeof r.reason === "string" && r.reason.trim() ? r.reason.trim() : "강의").slice(0, 20),
+      skip: (Array.isArray(r.skip) ? r.skip : []).filter(x => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x)).slice(-60),
+    });
+  }
+  return out;
+};
 
 const normalizeCfg = (v) => {
   const rooms = {};
@@ -114,6 +134,7 @@ const normalizeCfg = (v) => {
     rev: Number(v?.rev) || 0,
     info: typeof v?.info === "string" ? v.info.slice(0, 600) : DEFAULT_INFO,
     showRanking: v?.showRanking === undefined ? true : !!v.showRanking,
+    weekly: normalizeWeekly(v?.weekly),
     rooms,
   };
 };
@@ -187,6 +208,11 @@ const fetchDay = async d => {
   if (!a.ok || !Array.isArray(a.data)) return null;
   return { res: a.data.map(normT), locks: b.ok && Array.isArray(b.data) ? b.data.map(normT) : [] };
 };
+
+// 정기 규칙 → 해당 날짜의 잠금(서버 설정에서 계산, 학생·관리자 동일)
+const ruleLocks = (weekly, date) => (weekly || [])
+  .filter(r => r.days.includes(dow(date)) && !(r.skip || []).includes(date))
+  .map(r => ({ id: `rule:${r.id}:${date}`, rule_id: r.id, rule: true, date, studio_id: r.studio_id, start_time: r.start, end_time: r.end, reason: r.reason }));
 
 // ═════════════════════════════════════════════
 //  랭킹 계산 (예약해서 이용이 끝난 시간 기준)
@@ -829,7 +855,71 @@ function RoomSettings({ cfg, onChange, sync, onRetry }) {
 // ═════════════════════════════════════════════
 //  관리자: 날짜별 예약·잠금 현황
 // ═════════════════════════════════════════════
-function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancelRes, onDelLock, onAddLock }) {
+function WeeklyRules({ cfg, onChange, studios }) {
+  const [sid, setSid] = useState("A");
+  const [days, setDays] = useState([]);
+  const [t1, setT1] = useState("19:00"); const [t2, setT2] = useState("22:00");
+  const [reason, setReason] = useState("강의"); const [err, setErr] = useState("");
+  const rules = cfg.weekly || [];
+  const nameOf = id => id === "ALL" ? "전체 스튜디오" : (studios.find(s => s.id === id)?.name || id);
+  const toggleDay = d => setDays(p => p.includes(d) ? p.filter(x => x !== d) : [...p, d].sort());
+  const add = () => {
+    if (!days.length) { setErr("요일을 하나 이상 선택해주세요"); return; }
+    if (t1 >= t2) { setErr("종료시간이 시작보다 늦어야 해요"); return; }
+    if (rules.length >= 60) { setErr("규칙은 최대 60개까지 만들 수 있어요"); return; }
+    setErr("");
+    onChange(c => ({ ...c, weekly: [...(c.weekly || []), { id: uid(), studio_id: sid, days, start: t1, end: t2, reason: reason.trim() || "강의", skip: [] }] }));
+    setDays([]);
+  };
+  const del = id => onChange(c => ({ ...c, weekly: (c.weekly || []).filter(r => r.id !== id) }));
+  const sel = { ...inputStyle, padding: "10px 10px", fontSize: 14 };
+  return (
+    <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.border}`, marginBottom: 18 }}>
+      <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, marginBottom: 4 }}>🔁 매주 반복 강의 (자동 닫힘)</div>
+      <div style={{ fontSize: 11, color: C.light, marginBottom: 12 }}>한 번 등록하면 매주 해당 요일·시간에 자습실이 자동으로 닫혀요. 학생 화면에도 바로 반영돼요.</div>
+
+      <div style={{ background: C.bg, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        {err && <ErrBox>{err}</ErrBox>}
+        <label style={labelStyle}>스튜디오</label>
+        <select value={sid} onChange={e => setSid(e.target.value)} style={{ ...sel, marginBottom: 10 }}>
+          <option value="ALL">전체 스튜디오</option>
+          {studios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <label style={labelStyle}>요일 (여러 개 선택 가능)</label>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          {DAY.map((n, d) => (
+            <button key={d} onClick={() => toggleDay(d)} style={{ flex: 1, padding: "10px 0", borderRadius: 9, cursor: "pointer", fontWeight: 800, fontSize: 13,
+              border: `1.5px solid ${days.includes(d) ? C.blue : C.border}`, background: days.includes(d) ? C.blue : "#fff", color: days.includes(d) ? "#fff" : C.mid }}>{n}</button>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          {[["시작", t1, setT1], ["종료", t2, setT2]].map(([l, v, st]) => (
+            <div key={l}><label style={labelStyle}>{l}</label>
+              <select value={v} onChange={e => st(e.target.value)} style={sel}>
+                {[...SLOTS, "22:00"].map(x => <option key={x} value={x}>{x}</option>)}
+              </select></div>
+          ))}
+        </div>
+        <label style={labelStyle}>사유 (학생 화면에 표시)</label>
+        <input value={reason} onChange={e => setReason(e.target.value)} maxLength={20} style={{ ...sel, marginBottom: 10 }} />
+        <button onClick={add} style={{ width: "100%", background: C.navy, color: "#fff", border: "none", borderRadius: 11, padding: 12, fontWeight: 800, cursor: "pointer", fontSize: 14 }}>+ 반복 강의 추가</button>
+      </div>
+
+      {rules.length === 0 && <div style={{ fontSize: 12, color: C.light, textAlign: "center", padding: 8 }}>등록된 반복 강의가 없어요</div>}
+      {rules.map(r => (
+        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#FEE2E2", borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: C.err }}>{nameOf(r.studio_id)} · {r.days.map(d => DAY[d]).join("·")} {r.start}~{r.end}</div>
+            <div style={{ fontSize: 11, color: C.mid }}>🔒 {r.reason}{r.skip?.length ? ` · 제외된 날짜 ${r.skip.length}일` : ""}</div>
+          </div>
+          <ConfirmBtn label="삭제" onConfirm={() => del(r.id)} style={{ border: "none", borderRadius: 7, padding: "6px 11px", cursor: "pointer", fontWeight: 700, fontSize: 11, background: C.err, color: "#fff" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancelRes, onDelLock, onAddLock, onSkipRule }) {
   const [lockFor, setLockFor] = useState(null);
   const smallBtn = { border: "none", borderRadius: 7, padding: "5px 10px", cursor: "pointer", fontWeight: 700, fontSize: 11, background: "#FEE2E2", color: C.err };
   return (
@@ -863,8 +953,10 @@ function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancel
             {sLocks.map(l => (
               <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#FEE2E2", borderRadius: 8, padding: "8px 12px", marginBottom: 5 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: C.err, width: 84 }}>{l.start_time}~{l.end_time}</span>
-                <span style={{ flex: 1, fontSize: 12, color: C.err }}>🔒 {l.reason}{l.studio_id === "ALL" ? " (전체)" : ""}</span>
-                <ConfirmBtn label="해제" onConfirm={() => onDelLock(l.id)} style={{ ...smallBtn, background: C.err, color: "#fff" }} />
+                <span style={{ flex: 1, fontSize: 12, color: C.err }}>🔒 {l.reason}{l.studio_id === "ALL" ? " (전체)" : ""}{l.rule ? " 🔁" : ""}</span>
+                {l.rule
+                  ? <ConfirmBtn label="이 날만 해제" onConfirm={() => onSkipRule(l.rule_id, l.date)} style={{ ...smallBtn, background: C.err, color: "#fff" }} />
+                  : <ConfirmBtn label="해제" onConfirm={() => onDelLock(l.id)} style={{ ...smallBtn, background: C.err, color: "#fff" }} />}
               </div>
             ))}
           </div>
@@ -1057,7 +1149,7 @@ export default function App() {
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
   }, [date, entryOk, loadDay]);
   const dateRes = day.date === date ? day.res : [];
-  const dateLocks = day.date === date ? day.locks : [];
+  const dateLocks = useMemo(() => [...(day.date === date ? day.locks : []), ...ruleLocks(cfg.weekly, date)], [day, date, cfg.weekly]);
 
   const failNotice = (label, r) => setNotice({ kind: "err", text: `${label} (코드 ${r.status || "연결 실패"}${r.blocked ? ", 권한 차단" : ""}). 관리 탭 › 서버 진단으로 원인을 확인해주세요.` });
 
@@ -1068,7 +1160,7 @@ export default function App() {
     const room = normalizeCfg(c.cfg || makeDefaultCfg()).rooms[payload.studio_id];
     if (!room.open || room.seats <= 0) return { ok: false, msg: "지금은 운영하지 않는 자습실이에요." };
     for (const sl of slotsIn(payload.start_time, payload.end_time)) {
-      if (manualLock(d.locks, payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
+      if (manualLock([...d.locks, ...ruleLocks(normalizeCfg(c.cfg || makeDefaultCfg()).weekly, payload.date)], payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
       if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
     }
     const ins = await req("POST", "studio_reservations", payload, "return=minimal");
@@ -1099,6 +1191,10 @@ export default function App() {
     const r = await insertRow("studio_locks", p);
     if (!r.ok) { failNotice("잠금 저장에 실패했어요", r); return false; }
     setNotice({ kind: "ok", text: "잠금을 설정했어요" }); await loadDay(date, true); return true;
+  };
+  const skipRule = (ruleId, d) => {
+    changeCfg(c => ({ ...c, weekly: (c.weekly || []).map(r => r.id === ruleId ? { ...r, skip: [...new Set([...(r.skip || []), d])] } : r) }));
+    setNotice({ kind: "ok", text: `${fmt(d)} 하루만 정기 잠금을 해제했어요` });
   };
   const delLock = async id => {
     const r = await removeRow("studio_locks", id);
@@ -1285,8 +1381,9 @@ export default function App() {
           <div>
             <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 12 }}>관리자 모드</div>
             <RoomSettings cfg={cfg} onChange={changeCfg} sync={cfgSync} onRetry={flushCfg} />
+            <WeeklyRules cfg={cfg} onChange={changeCfg} studios={studios} />
             <AdminDay date={date} setDate={setDate} dates={getAdminDates()} studios={studios} res={dateRes} locks={dateLocks} loading={dayLoading}
-              onCancelRes={adminCancelRes} onDelLock={delLock} onAddLock={addLock} />
+              onCancelRes={adminCancelRes} onDelLock={delLock} onAddLock={addLock} onSkipRule={skipRule} />
             <button onClick={() => setShowChgPw(true)} style={{ marginTop: 6, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", cursor: "pointer", fontSize: 12, color: C.mid, fontWeight: 600 }}>🔑 관리자 비밀번호 변경</button>
             <Diagnostics />
           </div>
