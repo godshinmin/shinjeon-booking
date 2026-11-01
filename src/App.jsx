@@ -7,78 +7,43 @@ const SB  = "https://yigtucvlikxeddqghtqw.supabase.co";
 const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpZ3R1Y3ZsaWt4ZWRkcWdodHF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTcwNjgsImV4cCI6MjA5Nzg3MzA2OH0.MoTdu9sYMOLIaLhCNY9Ivs3hg32MbiHoqlOMcbRpIwY";
 const H   = { apikey: KEY, Authorization: `Bearer ${KEY}` };
 
-const ENTRY_CODE       = "0529";
-const DEFAULT_ADMIN_PW = "0000";
 const MAX_SEATS        = 15;
-const enc = encodeURIComponent;
 
-// 서버 권한(RLS) 문제가 있을 때 한 번 실행하는 복구 SQL (관리 탭 > 서버 진단에서 복사 가능)
-const FIX_SQL = `create table if not exists settings (key text primary key, value text);
-create table if not exists studio_reservations (id text primary key, date text, studio_id text, start_time text, end_time text, user_name text, user_class text, user_pw text);
-create table if not exists studio_locks (id text primary key, date text, studio_id text, start_time text, end_time text, reason text);
+// 로그인 정보는 이 화면의 메모리에만 둡니다 (입장 코드는 이 기기에 저장, 관리자 열쇠는 저장 안 함)
+const AUTH  = { entry: "", token: "" };
+const hooks = { entryFail: null, adminFail: null };
 
-alter table settings add column if not exists key text;
-alter table settings add column if not exists value text;
-alter table studio_locks add column if not exists reason text;
-
-alter table settings enable row level security;
-alter table studio_reservations enable row level security;
-alter table studio_locks enable row level security;
-
-drop policy if exists sj_anon_all on settings;
-create policy sj_anon_all on settings for all to anon using (true) with check (true);
-drop policy if exists sj_anon_all on studio_reservations;
-create policy sj_anon_all on studio_reservations for all to anon using (true) with check (true);
-drop policy if exists sj_anon_all on studio_locks;
-create policy sj_anon_all on studio_locks for all to anon using (true) with check (true);
-
-grant usage on schema public to anon;
-grant select, insert, update, delete on settings, studio_reservations, studio_locks to anon;
-notify pgrst, 'reload schema';`;
-
-// 모든 요청의 공통 통로: 성공 여부·상태코드·데이터를 항상 돌려줌 (조용히 실패하지 않음)
-const req = async (method, path, body, prefer) => {
+// 서버 함수 호출. 모든 예약·설정 작업은 서버가 직접 검사하는 함수로만 합니다.
+// 결과: { ok(서버가 승인), status, data, missing(서버 함수 없음) }
+const rpc = async (fn, args = {}, quiet = false) => {
   try {
-    const headers = { ...H };
-    if (body !== undefined && body !== null) headers["Content-Type"] = "application/json";
-    if (prefer) headers.Prefer = prefer;
-    const r = await fetch(`${SB}/rest/v1/${path}`, {
-      method, headers, cache: "no-store",
-      body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
+    const r = await fetch(`${SB}/rest/v1/rpc/${fn}`, {
+      method: "POST", headers: { ...H, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify(args),
     });
     const txt = await r.text();
     let data = null;
-    try { data = txt ? JSON.parse(txt) : null; } catch { data = txt; }
-    return { ok: r.ok, status: r.status, data };
+    try { data = txt ? JSON.parse(txt) : null; } catch { data = null; }
+    const good = r.ok && data && typeof data === "object";
+    if (good && !quiet) {
+      if (data.code === "entry" && hooks.entryFail) hooks.entryFail();
+      if (data.code === "auth" && hooks.adminFail) hooks.adminFail();
+    }
+    return { ok: !!good && data.ok === true, status: r.status, data: good ? data : {}, missing: r.status === 404 };
   } catch {
-    return { ok: false, status: 0, data: null };
+    return { ok: false, status: 0, data: {}, missing: false };
   }
 };
+const failMsg = (r, fallback) =>
+  r.status === 0 ? "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+  : r.missing ? "서버 업데이트가 아직 끝나지 않았어요. 관리자에게 알려주세요."
+  : (r.data && r.data.msg) || fallback;
 
-// 행 추가 후 서버에 실제로 들어갔는지 다시 읽어서 확인
-const insertRow = async (table, row) => {
-  const r = await req("POST", table, row, "return=minimal");
-  if (!r.ok) return { ok: false, status: r.status };
-  const chk = await req("GET", `${table}?id=eq.${enc(row.id)}&select=id`);
-  return { ok: chk.ok && Array.isArray(chk.data) && chk.data.length > 0, status: r.status };
-};
-
-// 행 삭제 후 실제로 지워졌는지 확인 (권한 때문에 0건 삭제되는 경우를 잡아냄)
-const removeRow = async (table, id) => {
-  const r = await req("DELETE", `${table}?id=eq.${enc(id)}`, null, "return=representation");
-  if (!r.ok) return { ok: false, status: r.status };
-  if (Array.isArray(r.data) && r.data.length > 0) return { ok: true };
-  const chk = await req("GET", `${table}?id=eq.${enc(id)}&select=id`);
-  if (chk.ok && Array.isArray(chk.data) && chk.data.length === 0) return { ok: true };
-  return { ok: false, status: r.status, blocked: true };
-};
-
-// settings 테이블: 수정 먼저, 없으면 추가 (삭제 후 추가하는 빈 구간이 없음)
-const upsertSetting = async (key, value) => {
-  const p = await req("PATCH", `settings?key=eq.${enc(key)}`, { value }, "return=representation");
-  if (p.ok && Array.isArray(p.data) && p.data.length > 0) return { ok: true };
-  const i = await req("POST", "settings", { key, value }, "return=minimal");
-  return { ok: i.ok, status: i.status };
+// 보안 점검용: 표를 브라우저에서 직접 열 수 있는지 확인 (잠금 후에는 거부돼야 정상)
+const probeTable = async table => {
+  try {
+    const r = await fetch(`${SB}/rest/v1/${table}?select=*&limit=1`, { headers: H, cache: "no-store" });
+    return r.ok ? "open" : (r.status === 401 || r.status === 403) ? "blocked" : "unknown";
+  } catch { return "unknown"; }
 };
 
 // ═════════════════════════════════════════════
@@ -171,18 +136,22 @@ const normalizeCfg = (v) => {
   };
 };
 
-// 서버에서 설정 읽기 (중복 행이 있어도 rev가 가장 큰 값을 사용)
+// 서버에서 설정 읽기 (서버가 rev가 가장 큰 값을 골라 줌)
 const readConfig = async () => {
-  const r = await req("GET", "settings?key=eq.room_config&select=value");
-  if (!r.ok || !Array.isArray(r.data)) return { ok: false, status: r.status };
-  let best = null;
-  for (const row of r.data) {
-    try {
-      const v = typeof row.value === "string" ? JSON.parse(row.value) : row.value;
-      if (v && v.rooms && (!best || (v.rev || 0) > (best.rev || 0))) best = v;
-    } catch {}
-  }
-  return { ok: true, cfg: best };
+  const r = await rpc("sj_config", { p_entry: AUTH.entry });
+  if (!r.ok) return { ok: false, status: r.status };
+  const v = r.data.value;
+  if (!v) return { ok: true, cfg: null };
+  try { const j = JSON.parse(v); return { ok: true, cfg: j && j.rooms ? j : null }; } catch { return { ok: false, status: 200 }; }
+};
+
+// 관리자 설정 저장: 서버가 "내가 본 버전(expectedRev) 그대로인지" 확인하고 저장 (동시 저장 충돌 방지)
+const saveConfigRemote = async (snap, expectedRev) => {
+  const r = await rpc("sj_admin_save_config", { p_token: AUTH.token, p_value: JSON.stringify(snap), p_expected_rev: expectedRev });
+  if (r.ok) return { ok: true };
+  if (r.data.code === "conflict") return { ok: false, conflict: true };
+  if (r.data.code === "auth") return { ok: false, msg: "관리자 로그인이 만료됐어요. 다시 로그인해주세요" };
+  return { ok: false, msg: failMsg(r, "서버가 저장을 거부했어요") };
 };
 
 // ═════════════════════════════════════════════
@@ -225,25 +194,15 @@ const getAdminDates = () => Array.from({ length: 14 }, (_, i) => { const d = new
 const isPastSlot = (date, slot) => date < today() || (date === today() && add30(slot) <= nowHM());
 const daysUntil = ds => Math.round((new Date(ds + "T00:00:00") - new Date(today() + "T00:00:00")) / 86400000);
 
-const slotsIn = (s, e) => SLOTS.filter(x => x >= s && x < e);
 const overlaps = (r, slot) => r.start_time < add30(slot) && r.end_time > slot;
 const manualLock = (locks, sid, slot) => locks.find(l => (l.studio_id === sid || l.studio_id === "ALL") && l.start_time < add30(slot) && l.end_time > slot);
 const slotBooked = (res, sid, slot) => res.filter(r => r.studio_id === sid && overlaps(r, slot)).length;
 
-// 동시 예약으로 정원이 넘쳤는지 (id 순서로 앞선 사람이 우선 → 두 기기가 같은 결론)
-const overbooked = (res, mine, seats) => slotsIn(mine.start_time, mine.end_time).some(slot => {
-  const rows = res.filter(r => r.studio_id === mine.studio_id && overlaps(r, slot)).sort((a, b) => (a.id < b.id ? -1 : 1));
-  return rows.findIndex(r => r.id === mine.id) >= seats;
-});
-
 const fetchDay = async d => {
-  const [a, b] = await Promise.all([
-    req("GET", `studio_reservations?date=eq.${d}&order=start_time.asc`),
-    req("GET", `studio_locks?date=eq.${d}`),
-  ]);
-  // 예약·잠금 둘 중 하나라도 못 읽으면 '빈자리'로 착각하지 않도록 실패로 처리
-  if (!a.ok || !Array.isArray(a.data) || !b.ok || !Array.isArray(b.data)) return null;
-  return { res: a.data.map(normT), locks: b.data.map(normT) };
+  const r = await rpc("sj_day", { p_entry: AUTH.entry, p_date: d, p_token: AUTH.token || null });
+  // 읽지 못했으면 '빈자리'로 착각하지 않도록 실패로 처리
+  if (!r.ok || !Array.isArray(r.data.res) || !Array.isArray(r.data.locks)) return null;
+  return { res: r.data.res.map(normT), locks: r.data.locks.map(normT), admin: !!r.data.admin };
 };
 
 // 정기 규칙 → 해당 날짜의 잠금(서버 설정에서 계산, 학생·관리자 동일)
@@ -252,61 +211,21 @@ const ruleLocks = (weekly, date) => (weekly || [])
   .map(r => ({ id: `rule:${r.id}:${date}`, rule_id: r.id, rule: true, date, studio_id: r.studio_id, start_time: r.start, end_time: r.end, reason: r.reason }));
 
 // ═════════════════════════════════════════════
-//  예약 처리 핵심 (오버부킹 방지)
-//  1) 서버의 최신 설정·예약·잠금으로 사전 점검
-//  2) 저장 3) 저장 직후와 잠시 뒤(settleMs)에 서버를 다시 읽어, 정원 초과·한 사람 두 자리가 되면
-//     id가 나중인 쪽이 스스로 취소 (동시에 눌러도 두 기기가 같은 결론)
+//  예약 처리 핵심
+//  서버 함수(sj_book)가 한 번에 한 건씩 정원·잠금·한 사람 한 자리·날짜 범위를 모두 검사하고 저장해요.
+//  연결이 끊겨 응답을 못 받으면 같은 예약 번호로 다시 보내요 (서버가 중복 저장하지 않음).
 // ═════════════════════════════════════════════
-const sameSpan = (a, b) => a.start_time < b.end_time && a.end_time > b.start_time;
-const fetchDayRetry = async (d, tries = 3) => {
-  for (let i = 0; i < tries; i++) { const r = await fetchDay(d); if (r) return r; if (i < tries - 1) await new Promise(x => setTimeout(x, 600)); }
-  return null;
-};
 const UNKNOWN_MSG = "서버 응답을 확인하지 못했어요. 예약이 저장됐을 수 있어요. '예약 확정'을 한 번 더 눌러도 중복 예약되지 않아요.";
-const placeBooking = async (payload, settleMs = 1200, isAdmin = false) => {
-  const [c, d] = await Promise.all([readConfig(), fetchDay(payload.date)]);
-  if (!c.ok || !d) return { ok: false, msg: "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요." };
-  const cfg = normalizeCfg(c.cfg || makeDefaultCfg());
-  const room = cfg.rooms[payload.studio_id];
-  if (!room) return { ok: false, msg: "존재하지 않는 자습실이에요." };
-  if (!room.open || room.seats <= 0) return { ok: false, msg: "지금은 운영하지 않는 자습실이에요." };
-  const maxDate = isAdmin ? getAdminDates()[13] : getDates()[3];
-  if (payload.date < today() || payload.date > maxDate) return { ok: false, msg: "예약할 수 없는 날짜예요." };
-  const slots = slotsIn(payload.start_time, payload.end_time);
-  if (!slots.length) return { ok: false, msg: "시간을 다시 선택해주세요." };
-  const me = normName(payload.user_name);
-  const already = d.res.some(r => r.id === payload.id); // 같은 요청의 재시도(이미 저장됨)
-  if (!already) {
-    if (slots.some(sl => isPastSlot(payload.date, sl))) return { ok: false, msg: "이미 지난 시간은 예약할 수 없어요. 다른 시간을 선택해주세요." };
-    if (d.res.some(r => normName(r.user_name) === me && sameSpan(r, payload))) return { ok: false, msg: "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요." };
-    const locks = [...d.locks, ...ruleLocks(cfg.weekly, payload.date)];
-    for (const sl of slots) {
-      if (manualLock(locks, payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
-      if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
-    }
-    const ins = await req("POST", "studio_reservations", payload, "return=minimal");
-    if (!ins.ok && ins.status !== 409) {
-      if (ins.status === 0) { // 응답을 못 받음: 실제로 저장됐는지 id로 확인
-        const chk = await fetchDayRetry(payload.date);
-        if (!chk) return { ok: false, unknown: true, msg: UNKNOWN_MSG };
-        if (!chk.res.some(r => r.id === payload.id)) return { ok: false, msg: "연결이 불안정해서 예약이 저장되지 않았어요. 다시 시도해주세요." };
-      } else return { ok: false, msg: `예약 저장에 실패했어요 (코드 ${ins.status}). 관리자에게 알려주세요.` };
-    }
+const placeBooking = async payload => {
+  let r = null;
+  for (let i = 0; i < 3; i++) {
+    r = await rpc("sj_book", { p_entry: AUTH.entry, p: payload, p_token: AUTH.token || null });
+    if (r.status !== 0 && r.status < 500) break;
+    if (i < 2) await new Promise(x => setTimeout(x, 700));
   }
-
-  const giveUp = async msg => {
-    const rm = await removeRow("studio_reservations", payload.id);
-    return { ok: false, msg: rm.ok ? msg : `${msg} (자동 취소에 실패했어요. 관리자에게 알려주세요)` };
-  };
-  for (let round = 0; round < 2; round++) {
-    if (round > 0) await new Promise(r => setTimeout(r, settleMs));
-    const after = await fetchDayRetry(payload.date);
-    if (!after) return { ok: false, unknown: true, msg: UNKNOWN_MSG };
-    if (!after.res.some(r => r.id === payload.id)) return { ok: false, msg: "예약이 서버에서 확인되지 않았어요. '내 예약'에서 확인해주세요." };
-    if (overbooked(after.res, payload, room.seats)) return giveUp("동시에 예약이 겹쳐 마감됐어요. 다른 시간을 선택해주세요.");
-    if (after.res.some(r => r.id < payload.id && normName(r.user_name) === me && sameSpan(r, payload))) return giveUp("한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요.");
-  }
-  return { ok: true };
+  if (r.ok) return { ok: true };
+  if (r.status === 0 || r.status >= 500) return { ok: false, unknown: true, msg: UNKNOWN_MSG };
+  return { ok: false, msg: failMsg(r, "예약 저장에 실패했어요. 잠시 후 다시 시도해주세요.") };
 };
 
 // ═════════════════════════════════════════════
@@ -355,14 +274,14 @@ const buildRanking = (rows, todayStr, nowStr) => {
   return list;
 };
 
-// 서버가 한 번에 1000행까지만 주므로 나눠서 모두 가져옴
+// 많을 때를 대비해 나눠서 모두 가져옴
 const fetchRankRows = async (from, to) => {
-  const PAGE = 1000, all = [];
-  for (let page = 0; page < 30; page++) {
-    const r = await req("GET", `studio_reservations?select=user_name,user_class,date,start_time,end_time&date=gte.${from}&date=lte.${to}&order=date.asc,id.asc&limit=${PAGE}&offset=${page * PAGE}`);
-    if (!r.ok || !Array.isArray(r.data)) return null;
-    all.push(...r.data);
-    if (r.data.length < PAGE) break;
+  const PAGE = 5000, all = [];
+  for (let page = 0; page < 20; page++) {
+    const r = await rpc("sj_rank_rows", { p_entry: AUTH.entry, p_from: from, p_to: to, p_off: page * PAGE, p_lim: PAGE });
+    if (!r.ok || !Array.isArray(r.data.rows)) return null;
+    for (const a of r.data.rows) all.push({ user_name: a[0], user_class: a[1], date: a[2], start_time: a[3], end_time: a[4] });
+    if (r.data.rows.length < PAGE) break;
   }
   return all;
 };
@@ -531,7 +450,8 @@ function ChangePwSheet({ onClose, onChange }) {
   };
   return (
     <Sheet onClose={onClose}>
-      <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 20 }}>🔑 관리자 비밀번호 변경</div>
+      <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 6 }}>🔑 관리자 비밀번호 변경</div>
+      <div style={{ fontSize: 11, color: C.light, marginBottom: 16 }}>4자 이상. 숫자만 쓰는 것보다 문자를 섞으면 훨씬 안전해요</div>
       {done ? (
         <div style={{ textAlign: "center", padding: "20px 0" }}><div style={{ fontSize: 40 }}>✅</div><div style={{ fontSize: 15, fontWeight: 700, color: C.ok }}>변경됐어요!</div></div>
       ) : (<>
@@ -704,15 +624,20 @@ function CancelSheet({ bookings, studios, onClose, onCancelOne, onDone }) {
   const [pws, setPws] = useState({}); const [errs, setErrs] = useState({}); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
   const run = async () => {
     const e = {};
-    bookings.forEach(b => { if ((pws[b.id] || "") !== String(b.user_pw)) e[b.id] = "비밀번호가 틀려요"; });
+    bookings.forEach(b => { if (!/^\d{4}$/.test(pws[b.id] || "")) e[b.id] = "비밀번호 4자리를 입력해주세요"; });
     setErrs(e);
     if (Object.keys(e).length) return;
     setBusy(true); setMsg("");
-    for (const b of bookings) {
-      const r = await onCancelOne(b.id);
-      if (!r.ok) { setBusy(false); setMsg(r.msg); return; }
+    const bad = {}; let stop = "";
+    for (const b of bookings) { // 비밀번호는 서버가 확인해요 (이 화면에는 비밀번호가 내려오지 않아요)
+      const r = await onCancelOne(b.id, pws[b.id]);
+      if (r.ok) continue;
+      if (r.wrong) bad[b.id] = r.msg; else { stop = r.msg; break; }
     }
-    setBusy(false); onDone(); onClose();
+    setBusy(false); onDone();
+    if (stop) { setMsg(stop); return; }
+    if (Object.keys(bad).length) { setErrs(bad); return; }
+    onClose();
   };
   return (
     <Sheet onClose={busy ? () => {} : onClose}>
@@ -821,10 +746,10 @@ function MyTab({ studios, onCancelRes }) {
   const search = async () => {
     const n = name.trim(); if (!n) return;
     setBusy(true); setErr(""); setSelected(new Set());
-    const r = await req("GET", `studio_reservations?user_name=eq.${enc(n)}&date=gte.${today()}&order=date.asc,start_time.asc`);
+    const r = await rpc("sj_my", { p_entry: AUTH.entry, p_name: n });
     setBusy(false);
-    if (!r.ok || !Array.isArray(r.data)) { setErr("서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요."); setList(null); return; }
-    setList(r.data.map(normT));
+    if (!r.ok || !Array.isArray(r.data.rows)) { setErr(failMsg(r, "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.")); setList(null); return; }
+    setList(r.data.rows.map(normT));
   };
   const toggle = id => setSelected(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSel = list && list.length > 0 && selected.size === list.length;
@@ -1079,9 +1004,9 @@ function WeeklyRules({ cfg, onChange, studios }) {
     if (rules.length >= 60) { setErr("규칙은 최대 60개까지 만들 수 있어요"); return; }
     setErr("");
     if (!ack) { // 앞으로의 기존 예약과 겹치는지 먼저 확인 (예약은 자동 삭제하지 않음)
-      const q = await req("GET", `studio_reservations?select=id,user_name,user_class,date,studio_id,start_time,end_time&date=gte.${today()}&order=date.asc&limit=1000`);
-      if (!q.ok || !Array.isArray(q.data)) { setErr("기존 예약을 확인하지 못했어요. 다시 시도해주세요"); return; }
-      const hit = q.data.map(normT).filter(r => days.includes(dow(r.date)) && (sid === "ALL" || r.studio_id === sid) && r.start_time < t2 && r.end_time > t1);
+      const q = await rpc("sj_admin_rows", { p_token: AUTH.token, p_from: today() });
+      if (!q.ok || !Array.isArray(q.data.rows)) { setErr("기존 예약을 확인하지 못했어요. 다시 시도해주세요"); return; }
+      const hit = q.data.rows.map(normT).filter(r => days.includes(dow(r.date)) && (sid === "ALL" || r.studio_id === sid) && r.start_time < t2 && r.end_time > t1);
       if (hit.length) { setConf(hit); setAck(true); return; }
     }
     onChange(c => ({ ...c, weekly: [...(c.weekly || []), { id: uid(), studio_id: sid, days, start: t1, end: t2, reason: reason.trim() || "강의", skip: [] }] }));
@@ -1196,60 +1121,37 @@ function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancel
 }
 
 // ═════════════════════════════════════════════
-//  관리자: 서버 진단 (읽기/쓰기/수정/삭제가 실제로 되는지 점검)
+//  관리자: 서버 진단 (읽기만 해요. 데이터를 바꾸지 않아요)
 // ═════════════════════════════════════════════
 function Diagnostics() {
-  const [rows, setRows] = useState(null); const [busy, setBusy] = useState(false); const [copied, setCopied] = useState(false);
+  const [rows, setRows] = useState(null); const [busy, setBusy] = useState(false);
   const run = async () => {
     setBusy(true); const out = [];
-    const st = r => {
-      const why = r.data && typeof r.data === "object" && !Array.isArray(r.data) ? (r.data.message || r.data.hint || r.data.details || "") : "";
-      return `HTTP ${r.status || "연결 실패"}${why ? " · " + String(why).slice(0, 140) : ""}`;
-    };
-    const add = (label, r, needRows) => {
-      const ok = r.ok && (!needRows || (Array.isArray(r.data) && r.data.length > 0));
-      out.push({ label, ok, detail: r.ok && needRows && !ok ? "요청은 통과했지만 0건 처리됨 (권한이 막고 있어요)" : st(r) });
-    };
-    const k = `__diag_${Date.now().toString(36)}`;
-    add("설정 읽기", await req("GET", "settings?select=key&limit=1"));
-    add("설정 추가", await req("POST", "settings", { key: k, value: "1" }, "return=minimal"));
-    add("설정 수정", await req("PATCH", `settings?key=eq.${k}`, { value: "2" }, "return=representation"), true);
-    add("설정 삭제", await req("DELETE", `settings?key=eq.${k}`, null, "return=representation"), true);
-    const lid = `diag-${Date.now().toString(36)}`;
-    add("잠금 읽기", await req("GET", "studio_locks?select=id&limit=1"));
-    add("잠금 추가", await req("POST", "studio_locks", { id: lid, date: "1999-01-01", studio_id: "A", start_time: "09:00", end_time: "10:00", reason: "diag" }, "return=minimal"));
-    add("잠금 삭제", await req("DELETE", `studio_locks?id=eq.${lid}`, null, "return=representation"), true);
-    const rid = `diag-${Date.now().toString(36)}r`;
-    add("예약 읽기", await req("GET", "studio_reservations?select=id&limit=1"));
-    add("예약 추가", await req("POST", "studio_reservations", { id: rid, date: "1999-01-01", studio_id: "A", start_time: "09:00", end_time: "10:00", user_name: "diag", user_class: "", user_pw: "0000" }, "return=minimal"));
-    add("예약 삭제", await req("DELETE", `studio_reservations?id=eq.${rid}`, null, "return=representation"), true);
+    const c = await rpc("sj_config", { p_entry: AUTH.entry }, true);
+    out.push({ label: "설정 읽기", ok: c.ok, detail: c.ok ? "정상" : failMsg(c, `오류 (HTTP ${c.status})`) });
+    const d = await rpc("sj_day", { p_entry: AUTH.entry, p_date: today(), p_token: AUTH.token || null }, true);
+    out.push({ label: "예약 읽기", ok: d.ok, detail: d.ok ? "정상" : failMsg(d, `오류 (HTTP ${d.status})`) });
+    out.push({ label: "관리자 열쇠", ok: d.ok && d.data.admin === true, detail: d.ok && d.data.admin === true ? "정상 (서버가 확인함)" : "로그인이 만료됐어요. 로그아웃 후 다시 로그인해주세요" });
+    for (const [label, t] of [["예약표 잠금", "studio_reservations"], ["잠금표 잠금", "studio_locks"], ["설정표 잠금", "settings"]]) {
+      const st = await probeTable(t);
+      out.push({ label, ok: st === "blocked", detail: st === "blocked" ? "브라우저에서 직접 접근 차단됨" : st === "open" ? "아직 직접 열 수 있어요 (2단계 잠금 SQL 필요)" : "확인하지 못했어요" });
+    }
     setRows(out); setBusy(false);
   };
   const allOk = rows && rows.every(r => r.ok);
-  const copy = async () => { try { await navigator.clipboard.writeText(FIX_SQL); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {} };
-
   return (
     <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.border}`, marginTop: 18 }}>
       <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, marginBottom: 4 }}>🛠 서버 진단</div>
-      <div style={{ fontSize: 11, color: C.mid, marginBottom: 12 }}>설정이 학생들에게 안 보이거나 저장이 안 될 때 눌러보세요. 서버가 읽기·쓰기·수정·삭제를 실제로 허용하는지 점검해요. (테스트 데이터는 자동으로 지워져요)</div>
+      <div style={{ fontSize: 11, color: C.mid, marginBottom: 12 }}>서버 연결과 보안 잠금 상태를 점검해요. 읽기만 하므로 데이터는 바뀌지 않아요.</div>
       <button onClick={run} disabled={busy} style={{ background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>{busy ? "점검 중…" : "진단 실행"}</button>
       {rows && (
         <div style={{ marginTop: 12 }}>
           {rows.map(r => (
             <div key={r.label} style={{ display: "flex", gap: 8, fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${C.bg}` }}>
-              <span style={{ width: 20 }}>{r.ok ? "✅" : "❌"}</span><span style={{ width: 70, fontWeight: 700 }}>{r.label}</span><span style={{ color: r.ok ? C.light : C.err, flex: 1 }}>{r.detail}</span>
+              <span style={{ width: 20 }}>{r.ok ? "✅" : "❌"}</span><span style={{ width: 84, fontWeight: 700 }}>{r.label}</span><span style={{ color: r.ok ? C.light : C.err, flex: 1 }}>{r.detail}</span>
             </div>
           ))}
-          {allOk ? (
-            <div style={{ marginTop: 10, fontSize: 12, color: C.ok, fontWeight: 700 }}>모두 정상이에요. 설정은 학생 화면과 동일하게 동기화돼요.</div>
-          ) : (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 12, color: C.err, fontWeight: 700, marginBottom: 6 }}>서버 권한 설정이 막고 있어요. 아래 SQL을 Supabase › SQL Editor에 붙여넣고 Run 한 뒤 다시 진단하세요.</div>
-              <textarea readOnly value={FIX_SQL} rows={8} onFocus={e => e.target.select()}
-                style={{ width: "100%", fontSize: 10, fontFamily: "monospace", padding: 8, borderRadius: 8, border: `1px solid ${C.border}`, boxSizing: "border-box" }} />
-              <button onClick={copy} style={{ marginTop: 6, background: C.blue, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>{copied ? "복사됨 ✓" : "SQL 복사"}</button>
-            </div>
-          )}
+          {allOk && <div style={{ marginTop: 10, fontSize: 12, color: C.ok, fontWeight: 700 }}>모두 정상이에요. 서버가 안전하게 잠겨 있어요.</div>}
         </div>
       )}
     </div>
@@ -1265,12 +1167,23 @@ export default function App() {
   const [entryChecked, setEntryChecked] = useState(false);
   const [entryInput, setEntryInput] = useState("");
   const [entryErr, setEntryErr] = useState(false);
+  const [entryMsg, setEntryMsg] = useState(""); const [entryBusy, setEntryBusy] = useState(false);
   useEffect(() => {
-    try { if (localStorage.getItem("sj_booking_entry_ok") === "1") setEntryOk(true); } catch {}
+    try {
+      const c = localStorage.getItem("sj_booking_entry_code");
+      if (c && /^\d{1,10}$/.test(c)) { AUTH.entry = c; setEntryOk(true); }
+      localStorage.removeItem("sj_booking_entry_ok"); // 예전 방식(코드 없이 통과)은 더 이상 쓰지 않아요
+    } catch {}
     setEntryChecked(true);
   }, []);
-  const tryEntry = () => {
-    if (entryInput.trim() === ENTRY_CODE) { setEntryOk(true); try { localStorage.setItem("sj_booking_entry_ok", "1"); } catch {} }
+  const tryEntry = async () => {
+    const code = entryInput.trim();
+    if (!code || entryBusy) return;
+    setEntryBusy(true); setEntryErr(false); setEntryMsg("");
+    const r = await rpc("sj_entry_check", { p_entry: code }, true);
+    setEntryBusy(false);
+    if (r.ok) { AUTH.entry = code; setEntryOk(true); try { localStorage.setItem("sj_booking_entry_code", code); } catch {} }
+    else if (r.status === 0 || r.missing || r.data.code === "locked") setEntryMsg(r.data.code === "locked" ? (r.data.msg || "잠시 후 다시 시도해주세요.") : failMsg(r, "잠시 후 다시 시도해주세요."));
     else { setEntryErr(true); setEntryInput(""); }
   };
 
@@ -1279,6 +1192,15 @@ export default function App() {
   const [admin, setAdmin] = useState(false);
   const [pw, setPw] = useState(""); const [pwErr, setPwErr] = useState(""); const [loginBusy, setLoginBusy] = useState(false);
   const [showChgPw, setShowChgPw] = useState(false);
+  useEffect(() => {
+    hooks.adminFail = () => { if (!AUTH.token) return; AUTH.token = ""; setAdmin(false); setNotice({ kind: "err", text: "관리자 로그인이 만료됐어요. 다시 로그인해주세요" }); };
+    hooks.entryFail = () => {
+      AUTH.entry = ""; AUTH.token = "";
+      try { localStorage.removeItem("sj_booking_entry_code"); } catch {}
+      setAdmin(false); setEntryOk(false); setEntryInput(""); setEntryMsg("입장 코드를 다시 입력해주세요");
+    };
+    return () => { hooks.adminFail = null; hooks.entryFail = null; };
+  }, []);
   const [date, setDate] = useState(today());
   const [sid, setSid] = useState("A");
   const [notice, setNotice] = useState(null);
@@ -1301,20 +1223,33 @@ export default function App() {
     try {
       do {
         pendingRef.current = false;
-        // 저장 직전에 서버를 확인: 다른 기기가 먼저 저장했다면 내 변경만 그 위에 합쳐서 저장
-        const pre = await readConfig();
-        if (pre.ok && pre.cfg && baseRef.current) {
-          const theirs = normalizeCfg(pre.cfg);
-          if (theirs.rev > baseRef.current.rev && theirs.rev !== cfgRef.current.rev) {
-            const merged = normalizeCfg({ ...mergeCfg(baseRef.current, cfgRef.current, theirs), rev: Math.max(Date.now(), theirs.rev + 1) });
-            cfgRef.current = merged; setCfg(merged); baseRef.current = theirs;
+        let snap = null, saved = false;
+        for (let attempt = 0; attempt < 4 && !saved; attempt++) {
+          // 저장 직전에 서버를 확인: 다른 기기가 먼저 저장했다면 내 변경만 그 위에 합쳐서 저장
+          const pre = await readConfig();
+          if (!pre.ok) throw new Error("서버에 연결할 수 없어요");
+          let serverRev = 0;
+          if (pre.cfg) {
+            const theirs = normalizeCfg(pre.cfg);
+            serverRev = theirs.rev;
+            if (baseRef.current && theirs.rev > baseRef.current.rev && theirs.rev !== cfgRef.current.rev) {
+              const merged = normalizeCfg({ ...mergeCfg(baseRef.current, cfgRef.current, theirs), rev: Math.max(Date.now(), theirs.rev + 1) });
+              cfgRef.current = merged; setCfg(merged); baseRef.current = theirs;
+            }
           }
+          if (cfgRef.current.rev <= serverRev) {
+            const bumped = normalizeCfg({ ...cfgRef.current, rev: Math.max(Date.now(), serverRev + 1) });
+            cfgRef.current = bumped; setCfg(bumped);
+          }
+          snap = cfgRef.current;
+          // 서버가 "내가 본 버전 그대로일 때만" 저장해요. 그 사이 누가 저장했으면 충돌로 돌려보내 다시 병합해요
+          const w = await saveConfigRemote(snap, serverRev);
+          if (w.ok) { saved = true; baseRef.current = snap; }
+          else if (!w.conflict) throw new Error(w.msg);
         }
-        const snap = cfgRef.current;
-        const w = await upsertSetting("room_config", JSON.stringify(snap));
-        if (!w.ok) throw new Error(`서버가 저장을 거부했어요 ${w.status || ""}`.trim());
+        if (!saved) throw new Error("다른 기기와 동시에 저장하느라 실패했어요. 저장 버튼을 다시 눌러주세요");
         const back = await readConfig();
-        if (!pendingRef.current && (!back.ok || !back.cfg || back.cfg.rev !== snap.rev)) throw new Error("서버에 반영됐는지 확인되지 않았어요");
+        if (!pendingRef.current && (!back.ok || !back.cfg || back.cfg.rev < snap.rev)) throw new Error("서버에 반영됐는지 확인되지 않았어요");
       } while (pendingRef.current);
       dirtyRef.current = false;
       baseRef.current = cfgRef.current;
@@ -1392,7 +1327,7 @@ export default function App() {
     if (!silent) setDayLoading(true);
     const r = await fetchDay(d);
     if (dateRef.current === d) {
-      if (r) setDay({ date: d, res: r.res, locks: r.locks, ok: true });
+      if (r) { setDay({ date: d, res: r.res, locks: r.locks, ok: true }); if (AUTH.token && !r.admin && hooks.adminFail) hooks.adminFail(); }
       else setDay(p => ({ ...p, ok: false }));
     }
     if (!silent) setDayLoading(false);
@@ -1415,29 +1350,31 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  const failNotice = (label, r) => setNotice({ kind: "err", text: `${label} (코드 ${r.status || "연결 실패"}${r.blocked ? ", 권한 차단" : ""}). 관리 탭 › 서버 진단으로 원인을 확인해주세요.` });
+  const failNotice = (label, r) => setNotice({ kind: "err", text: `${label} (${failMsg(r, `코드 ${r.status}`)}). 관리 탭 › 서버 진단으로 원인을 확인해주세요.` });
 
-  // ── 예약: 서버에서 최신 설정·예약·잠금을 다시 확인하고, 저장 후에도 검증 ──
+  // ── 예약: 서버가 정원·잠금·중복·날짜를 한 번에 검사하고 저장 ──
   const onBook = useCallback(async payload => {
-    const r = await placeBooking(payload, 1200, admin);
+    const r = await placeBooking(payload);
     loadDay(payload.date, true);
     return r;
-  }, [loadDay, admin]);
+  }, [loadDay]);
 
-  const cancelRes = useCallback(async id => {
-    const r = await removeRow("studio_reservations", id);
-    if (!r.ok) return { ok: false, msg: `취소에 실패했어요 (코드 ${r.status || "연결 실패"}${r.blocked ? ", 권한 차단" : ""}). 관리자에게 알려주세요.` };
-    loadDay(dateRef.current, true);
-    return { ok: true };
+  // 학생 취소: 비밀번호는 서버가 확인
+  const cancelRes = useCallback(async (id, pw) => {
+    const r = await rpc("sj_cancel", { p_entry: AUTH.entry, p_id: id, p_pw: pw });
+    if (r.ok || r.data.code === "not_found") { loadDay(dateRef.current, true); return { ok: true }; }
+    if (r.data.code === "wrong_pw") return { ok: false, wrong: true, msg: `비밀번호가 틀려요${typeof r.data.left === "number" ? ` (남은 시도 ${r.data.left}번)` : ""}` };
+    return { ok: false, msg: failMsg(r, "취소에 실패했어요. 잠시 후 다시 시도해주세요.") };
   }, [loadDay]);
 
   const adminCancelRes = async id => {
-    const r = await cancelRes(id);
-    if (!r.ok) setNotice({ kind: "err", text: r.msg }); else setNotice({ kind: "ok", text: "예약을 취소했어요" });
+    const r = await rpc("sj_admin_cancel", { p_token: AUTH.token, p_id: id });
+    if (!r.ok) { if (r.data.code !== "auth") setNotice({ kind: "err", text: failMsg(r, "취소에 실패했어요") }); return; }
+    setNotice({ kind: "ok", text: "예약을 취소했어요" }); loadDay(dateRef.current, true);
   };
   const addLock = async p => {
-    const r = await insertRow("studio_locks", p);
-    if (!r.ok) { failNotice("잠금 저장에 실패했어요", r); return false; }
+    const r = await rpc("sj_admin_lock_add", { p_token: AUTH.token, p });
+    if (!r.ok) { if (r.data.code !== "auth") failNotice("잠금 저장에 실패했어요", r); return false; }
     setNotice({ kind: "ok", text: "잠금을 설정했어요" }); await loadDay(date, true); return true;
   };
   const skipRule = (ruleId, d) => {
@@ -1445,32 +1382,28 @@ export default function App() {
     setNotice({ kind: "ok", text: `${fmt(d)} 하루만 정기 잠금을 해제했어요` });
   };
   const delLock = async id => {
-    const r = await removeRow("studio_locks", id);
-    if (!r.ok) { failNotice("잠금 해제에 실패했어요", r); return; }
+    const r = await rpc("sj_admin_lock_del", { p_token: AUTH.token, p_id: id });
+    if (!r.ok) { if (r.data.code !== "auth") failNotice("잠금 해제에 실패했어요", r); return; }
     setNotice({ kind: "ok", text: "잠금을 해제했어요" }); await loadDay(date, true);
   };
 
-  // ── 관리자 로그인/비밀번호 (항상 서버 값과 비교) ──
+  // ── 관리자 로그인/비밀번호: 비밀번호 확인은 서버에서만, 로그인하면 12시간짜리 열쇠를 받아요 ──
   const loginAdmin = async () => {
     setLoginBusy(true); setPwErr("");
-    const r = await req("GET", "settings?key=eq.booking_admin_pw&select=value");
-    if (!r.ok) { setPwErr("서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요."); setLoginBusy(false); return; }
-    const server = Array.isArray(r.data) && r.data.length ? String(r.data[r.data.length - 1].value) : DEFAULT_ADMIN_PW;
-    if (pw === server) { setAdmin(true); setPw(""); } else setPwErr("비밀번호가 틀렸어요");
+    const r = await rpc("sj_admin_login", { p_pw: pw }, true);
+    if (r.ok && r.data.token) { AUTH.token = r.data.token; setAdmin(true); setPw(""); }
+    else if (r.data.code === "wrong" && typeof r.data.left === "number") setPwErr(`비밀번호가 틀렸어요 (남은 시도 ${r.data.left}번)`);
+    else setPwErr(failMsg(r, "비밀번호가 틀렸어요"));
     setLoginBusy(false);
   };
-  const logoutAdmin = () => { setAdmin(false); setDate(today()); };
+  const logoutAdmin = () => {
+    const t = AUTH.token; AUTH.token = "";
+    if (t) rpc("sj_admin_logout", { p_token: t }, true);
+    setAdmin(false); setDate(today());
+  };
   const changeAdminPw = async (cur, next) => {
-    const r = await req("GET", "settings?key=eq.booking_admin_pw&select=value");
-    if (!r.ok) return { ok: false, msg: "서버에 연결할 수 없어요" };
-    const server = Array.isArray(r.data) && r.data.length ? String(r.data[r.data.length - 1].value) : DEFAULT_ADMIN_PW;
-    if (cur !== server) return { ok: false, msg: "현재 비밀번호가 틀렸어요" };
-    const w = await upsertSetting("booking_admin_pw", next);
-    if (!w.ok) return { ok: false, msg: `서버 저장 실패 (코드 ${w.status || "연결 실패"}). 서버 진단을 실행해주세요.` };
-    const chk = await req("GET", "settings?key=eq.booking_admin_pw&select=value");
-    const last = chk.ok && Array.isArray(chk.data) && chk.data.length ? String(chk.data[chk.data.length - 1].value) : null;
-    if (last !== next) return { ok: false, msg: "서버에서 변경이 확인되지 않았어요. 서버 진단을 실행해주세요." };
-    return { ok: true };
+    const r = await rpc("sj_admin_change_pw", { p_token: AUTH.token, p_cur: cur, p_new: next });
+    return r.ok ? { ok: true } : { ok: false, msg: failMsg(r, "변경에 실패했어요") };
   };
 
   // ── 학생 화면용 스튜디오 상태 ──
@@ -1497,7 +1430,8 @@ export default function App() {
               onKeyDown={e => e.key === "Enter" && tryEntry()} placeholder="입장 코드" autoFocus inputMode="numeric"
               style={{ width: "100%", padding: "13px 14px", borderRadius: 11, border: `1.5px solid ${entryErr ? C.err : "#ffffff33"}`, fontSize: 16, outline: "none", boxSizing: "border-box", textAlign: "center", letterSpacing: 6, background: "#ffffff12", color: "#fff", marginBottom: 10 }} />
             {entryErr && <div style={{ fontSize: 12, color: "#FF8A8A", marginBottom: 10 }}>❌ 코드가 올바르지 않아요</div>}
-            <button onClick={tryEntry} style={{ width: "100%", background: C.accent, color: C.navy, border: "none", borderRadius: 11, padding: 13, fontWeight: 800, cursor: "pointer", fontSize: 15 }}>입장하기</button>
+            {entryMsg && <div style={{ fontSize: 12, color: "#FF8A8A", marginBottom: 10 }}>⚠️ {entryMsg}</div>}
+            <button onClick={tryEntry} style={{ width: "100%", background: C.accent, color: C.navy, border: "none", borderRadius: 11, padding: 13, fontWeight: 800, cursor: "pointer", fontSize: 15 }}>{entryBusy ? "확인 중…" : "입장하기"}</button>
           </div>
         </div>
       </div>
