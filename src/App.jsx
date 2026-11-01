@@ -123,6 +123,21 @@ const normalizeWeekly = (w) => {
   return out;
 };
 
+// 다른 기기가 먼저 저장한 설정 위에, 내가 바꾼 항목만 얹어서 합침 (서로의 수정이 덮어써지지 않도록)
+const sj = x => JSON.stringify(x);
+const mergeCfg = (base, mine, theirs) => {
+  const out = { ...theirs, rooms: { ...theirs.rooms } };
+  for (const k of ["info", "showRanking", "rankingSince", "dday", "notice", "message"]) if (sj(mine[k]) !== sj(base[k])) out[k] = mine[k];
+  for (const id of Object.keys(mine.rooms)) if (sj(mine.rooms[id]) !== sj(base.rooms?.[id])) out.rooms[id] = mine.rooms[id];
+  const bw = base.weekly || [], mw = mine.weekly || [];
+  const bIds = new Set(bw.map(r => r.id)), mIds = new Set(mw.map(r => r.id));
+  let w = (theirs.weekly || []).filter(r => !(bIds.has(r.id) && !mIds.has(r.id)));     // 내가 지운 규칙 제거
+  w = w.map(r => { const m = mw.find(x => x.id === r.id); return m && sj(m) !== sj(bw.find(x => x.id === r.id)) ? m : r; }); // 내가 고친 규칙 반영
+  for (const r of mw) if (!bIds.has(r.id) && !w.some(x => x.id === r.id)) w.push(r);   // 내가 추가한 규칙 추가
+  out.weekly = w;
+  return out;
+};
+
 const normalizeCfg = (v) => {
   const rooms = {};
   STUDIO_META.forEach(m => {
@@ -226,8 +241,9 @@ const fetchDay = async d => {
     req("GET", `studio_reservations?date=eq.${d}&order=start_time.asc`),
     req("GET", `studio_locks?date=eq.${d}`),
   ]);
-  if (!a.ok || !Array.isArray(a.data)) return null;
-  return { res: a.data.map(normT), locks: b.ok && Array.isArray(b.data) ? b.data.map(normT) : [] };
+  // 예약·잠금 둘 중 하나라도 못 읽으면 '빈자리'로 착각하지 않도록 실패로 처리
+  if (!a.ok || !Array.isArray(a.data) || !b.ok || !Array.isArray(b.data)) return null;
+  return { res: a.data.map(normT), locks: b.data.map(normT) };
 };
 
 // 정기 규칙 → 해당 날짜의 잠금(서버 설정에서 계산, 학생·관리자 동일)
@@ -242,27 +258,41 @@ const ruleLocks = (weekly, date) => (weekly || [])
 //     id가 나중인 쪽이 스스로 취소 (동시에 눌러도 두 기기가 같은 결론)
 // ═════════════════════════════════════════════
 const sameSpan = (a, b) => a.start_time < b.end_time && a.end_time > b.start_time;
-const placeBooking = async (payload, settleMs = 1200) => {
+const fetchDayRetry = async (d, tries = 3) => {
+  for (let i = 0; i < tries; i++) { const r = await fetchDay(d); if (r) return r; if (i < tries - 1) await new Promise(x => setTimeout(x, 600)); }
+  return null;
+};
+const UNKNOWN_MSG = "서버 응답을 확인하지 못했어요. 예약이 저장됐을 수 있어요. '예약 확정'을 한 번 더 눌러도 중복 예약되지 않아요.";
+const placeBooking = async (payload, settleMs = 1200, isAdmin = false) => {
   const [c, d] = await Promise.all([readConfig(), fetchDay(payload.date)]);
   if (!c.ok || !d) return { ok: false, msg: "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요." };
   const cfg = normalizeCfg(c.cfg || makeDefaultCfg());
   const room = cfg.rooms[payload.studio_id];
   if (!room) return { ok: false, msg: "존재하지 않는 자습실이에요." };
   if (!room.open || room.seats <= 0) return { ok: false, msg: "지금은 운영하지 않는 자습실이에요." };
-  if (payload.date < today() || payload.date > getAdminDates()[13]) return { ok: false, msg: "예약할 수 없는 날짜예요." };
+  const maxDate = isAdmin ? getAdminDates()[13] : getDates()[3];
+  if (payload.date < today() || payload.date > maxDate) return { ok: false, msg: "예약할 수 없는 날짜예요." };
   const slots = slotsIn(payload.start_time, payload.end_time);
   if (!slots.length) return { ok: false, msg: "시간을 다시 선택해주세요." };
-  if (slots.some(sl => isPastSlot(payload.date, sl))) return { ok: false, msg: "이미 지난 시간은 예약할 수 없어요. 다른 시간을 선택해주세요." };
   const me = normName(payload.user_name);
-  const dupMsg = "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요.";
-  if (d.res.some(r => normName(r.user_name) === me && sameSpan(r, payload))) return { ok: false, msg: dupMsg };
-  const locks = [...d.locks, ...ruleLocks(cfg.weekly, payload.date)];
-  for (const sl of slots) {
-    if (manualLock(locks, payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
-    if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
+  const already = d.res.some(r => r.id === payload.id); // 같은 요청의 재시도(이미 저장됨)
+  if (!already) {
+    if (slots.some(sl => isPastSlot(payload.date, sl))) return { ok: false, msg: "이미 지난 시간은 예약할 수 없어요. 다른 시간을 선택해주세요." };
+    if (d.res.some(r => normName(r.user_name) === me && sameSpan(r, payload))) return { ok: false, msg: "한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요. '내 예약'에서 확인해주세요." };
+    const locks = [...d.locks, ...ruleLocks(cfg.weekly, payload.date)];
+    for (const sl of slots) {
+      if (manualLock(locks, payload.studio_id, sl)) return { ok: false, msg: "선택한 시간에 잠금이 설정돼 있어요." };
+      if (slotBooked(d.res, payload.studio_id, sl) >= room.seats) return { ok: false, msg: "방금 마감된 시간이 있어요. 다른 시간을 선택해주세요." };
+    }
+    const ins = await req("POST", "studio_reservations", payload, "return=minimal");
+    if (!ins.ok && ins.status !== 409) {
+      if (ins.status === 0) { // 응답을 못 받음: 실제로 저장됐는지 id로 확인
+        const chk = await fetchDayRetry(payload.date);
+        if (!chk) return { ok: false, unknown: true, msg: UNKNOWN_MSG };
+        if (!chk.res.some(r => r.id === payload.id)) return { ok: false, msg: "연결이 불안정해서 예약이 저장되지 않았어요. 다시 시도해주세요." };
+      } else return { ok: false, msg: `예약 저장에 실패했어요 (코드 ${ins.status}). 관리자에게 알려주세요.` };
+    }
   }
-  const ins = await req("POST", "studio_reservations", payload, "return=minimal");
-  if (!ins.ok) return { ok: false, msg: `예약 저장에 실패했어요 (코드 ${ins.status || "연결 실패"}). 관리자에게 알려주세요.` };
 
   const giveUp = async msg => {
     const rm = await removeRow("studio_reservations", payload.id);
@@ -270,8 +300,9 @@ const placeBooking = async (payload, settleMs = 1200) => {
   };
   for (let round = 0; round < 2; round++) {
     if (round > 0) await new Promise(r => setTimeout(r, settleMs));
-    const after = await fetchDay(payload.date);
-    if (!after || !after.res.some(r => r.id === payload.id)) return { ok: false, msg: "예약이 서버에서 확인되지 않았어요. '내 예약'에서 확인해주세요." };
+    const after = await fetchDayRetry(payload.date);
+    if (!after) return { ok: false, unknown: true, msg: UNKNOWN_MSG };
+    if (!after.res.some(r => r.id === payload.id)) return { ok: false, msg: "예약이 서버에서 확인되지 않았어요. '내 예약'에서 확인해주세요." };
     if (overbooked(after.res, payload, room.seats)) return giveUp("동시에 예약이 겹쳐 마감됐어요. 다른 시간을 선택해주세요.");
     if (after.res.some(r => r.id < payload.id && normName(r.user_name) === me && sameSpan(r, payload))) return giveUp("한 사람당 한 자리만 예약할 수 있어요. 같은 시간에 이미 예약이 있어요.");
   }
@@ -407,6 +438,8 @@ function BookSheet({ studio, date, s1, s2, onClose, onSubmit, onSuccess }) {
   const [pw, setPw]     = useState("");
   const [err, setErr]   = useState("");
   const [busy, setBusy] = useState(false);
+  const idRef = useRef(null);
+  if (!idRef.current) idRef.current = uid(); // 같은 예약 화면에서 다시 눌러도 같은 id → 중복 저장 방지
   const endTime = add30(s2);
 
   const confirm = async () => {
@@ -415,7 +448,7 @@ function BookSheet({ studio, date, s1, s2, onClose, onSubmit, onSuccess }) {
     if (!/^[0-9]{4}$/.test(pw)) { setErr("비밀번호는 숫자 4자리로 입력해주세요"); return; }
     setBusy(true); setErr("");
     const nm = name.replace(/\s+/g, " ").trim();
-    const payload = { id: uid(), date, studio_id: studio.id, start_time: s1, end_time: endTime, user_name: nm, user_class: cleanTutor(tutor), user_pw: pw };
+    const payload = { id: idRef.current, date, studio_id: studio.id, start_time: s1, end_time: endTime, user_name: nm, user_class: cleanTutor(tutor), user_pw: pw };
     const r = await onSubmit(payload);
     setBusy(false);
     if (r.ok) {
@@ -517,12 +550,16 @@ function ChangePwSheet({ onClose, onChange }) {
   );
 }
 
-function LockSheet({ date, studio, studios, onClose, onSubmit }) {
+function LockSheet({ date, studio, studios, res = [], onClose, onSubmit }) {
   const [sid, setSid] = useState(studio?.id || "A");
   const [t1, setT1] = useState("09:00"); const [t2, setT2] = useState("22:00");
   const [reason, setReason] = useState("강의"); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const [ack, setAck] = useState(false);
+  const conflicts = res.filter(r => (sid === "ALL" || r.studio_id === sid) && r.start_time < t2 && r.end_time > t1);
+  useEffect(() => { setAck(false); }, [sid, t1, t2]);
   const save = async () => {
     if (t1 >= t2) { setErr("종료시간이 시작보다 늦어야 해요"); return; }
+    if (conflicts.length && !ack) { setAck(true); return; } // 기존 예약과 겹치면 한 번 더 확인 (예약은 자동 삭제하지 않음)
     setBusy(true);
     const ok = await onSubmit({ id: uid(), date, studio_id: sid, start_time: t1, end_time: t2, reason: reason.trim() || "강의" });
     setBusy(false);
@@ -533,6 +570,12 @@ function LockSheet({ date, studio, studios, onClose, onSubmit }) {
       <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 4 }}>🔒 시간 잠금</div>
       <div style={{ fontSize: 12, color: C.mid, marginBottom: 16 }}>{fmt(date)}({DAY[dow(date)]}) 하루만 적용돼요</div>
       {err && <ErrBox>{err}</ErrBox>}
+      {conflicts.length > 0 && (
+        <div style={{ background: "#FFF7E0", border: `1.5px solid ${C.accent}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: "#8A6A12" }}>
+          <b>⚠️ 이 시간에 이미 예약이 {conflicts.length}건 있어요.</b> 잠금을 설정해도 기존 예약은 지워지지 않아요.
+          <div style={{ marginTop: 6, color: C.tx }}>{conflicts.slice(0, 6).map(r => <div key={r.id}>· {r.start_time}~{r.end_time} {r.user_name}{tutTag(r.user_class)}</div>)}{conflicts.length > 6 && <div>… 외 {conflicts.length - 6}건</div>}</div>
+        </div>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
         <div>
           <label style={labelStyle}>스튜디오</label>
@@ -552,7 +595,7 @@ function LockSheet({ date, studio, studios, onClose, onSubmit }) {
         <div><label style={labelStyle}>사유</label><input value={reason} onChange={e => setReason(e.target.value)} style={{ ...inputStyle, padding: "11px 12px", fontSize: 14 }} /></div>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
-        <button onClick={save} disabled={busy} style={{ flex: 1, background: C.err, color: "#fff", border: "none", borderRadius: 12, padding: 13, fontWeight: 800, cursor: "pointer" }}>{busy ? "저장 중…" : "잠금 설정"}</button>
+        <button onClick={save} disabled={busy} style={{ flex: 1, background: C.err, color: "#fff", border: "none", borderRadius: 12, padding: 13, fontWeight: 800, cursor: "pointer" }}>{busy ? "저장 중…" : conflicts.length && ack ? "예약이 있어도 잠금 설정" : "잠금 설정"}</button>
         <button onClick={onClose} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 16px", cursor: "pointer", color: C.mid }}>취소</button>
       </div>
     </Sheet>
@@ -562,7 +605,7 @@ function LockSheet({ date, studio, studios, onClose, onSubmit }) {
 // ═════════════════════════════════════════════
 //  타임 그리드 (학생/관리자 공용)
 // ═════════════════════════════════════════════
-function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, onAddLock }) {
+function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, onAddLock, blocked }) {
   const [sel1, setSel1] = useState(null);
   const [sel2, setSel2] = useState(null);
   const [sheet, setSheet] = useState(null);
@@ -574,7 +617,7 @@ function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, on
   const clearSel = () => { setSel1(null); setSel2(null); };
 
   const click = slot => {
-    if (!studio.runs || lockOf(slot) || full(slot) || isPastSlot(date, slot)) return;
+    if (blocked || !studio.runs || lockOf(slot) || full(slot) || isPastSlot(date, slot)) return;
     if (!sel1 || slot < sel1) { setSel1(slot); setSel2(slot); return; }
     const range = SLOTS.filter(s => s >= sel1 && s <= slot);
     if (range.some(s => lockOf(s) || full(s) || isPastSlot(date, s))) { setSel1(slot); setSel2(slot); } // 중간에 잠금/마감이 있으면 새로 시작
@@ -603,6 +646,8 @@ function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, on
       ) : (
         <div style={{ fontSize: 11, color: C.light, marginBottom: 10 }}>☝️ 시작 시간 → 끝 시간 순서로 터치하세요</div>
       )}
+
+      {blocked && <div style={{ background: "#FFF7E0", border: `1px solid ${C.accent}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#8A6A12", fontWeight: 700, marginBottom: 12 }}>⏳ 최신 예약 현황을 확인하는 중이에요. 확인되면 예약할 수 있어요.</div>}
 
       {isAdmin && (
         <button onClick={() => setSheet("lock")}
@@ -646,7 +691,7 @@ function TimeGrid({ studio, studios, date, res, locks, isAdmin, info, onBook, on
           onClose={() => setSheet(null)} onSubmit={onBook}
           onSuccess={p => { setDone(p); setSheet(null); clearSel(); }} />
       )}
-      {sheet === "lock" && <LockSheet date={date} studio={studio} studios={studios} onClose={() => setSheet(null)} onSubmit={onAddLock} />}
+      {sheet === "lock" && <LockSheet date={date} studio={studio} studios={studios} res={res} onClose={() => setSheet(null)} onSubmit={onAddLock} />}
       {done && <DoneSheet booking={done} studio={studio} info={info} onClose={() => setDone(null)} />}
     </div>
   );
@@ -716,7 +761,7 @@ function RankingTab({ since }) {
     setRows(buildRanking(data, today(), nowHM()));
   }, [period, since]);
 
-  useEffect(() => { setRows(null); load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { setRows(null); load(); const t = setInterval(() => { if (document.visibilityState !== "hidden") load(); }, 60000); return () => clearInterval(t); }, [load]);
 
   const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
   const top = rows ? rows.filter(p => p.rank <= 5).slice(0, 10) : [];
@@ -1023,14 +1068,22 @@ function WeeklyRules({ cfg, onChange, studios }) {
   const [days, setDays] = useState([]);
   const [t1, setT1] = useState("19:00"); const [t2, setT2] = useState("22:00");
   const [reason, setReason] = useState("강의"); const [err, setErr] = useState("");
+  const [ack, setAck] = useState(false); const [conf, setConf] = useState([]);
+  useEffect(() => { setAck(false); setConf([]); }, [sid, days, t1, t2]);
   const rules = cfg.weekly || [];
   const nameOf = id => id === "ALL" ? "전체 스튜디오" : (studios.find(s => s.id === id)?.name || id);
   const toggleDay = d => setDays(p => p.includes(d) ? p.filter(x => x !== d) : [...p, d].sort());
-  const add = () => {
+  const add = async () => {
     if (!days.length) { setErr("요일을 하나 이상 선택해주세요"); return; }
     if (t1 >= t2) { setErr("종료시간이 시작보다 늦어야 해요"); return; }
     if (rules.length >= 60) { setErr("규칙은 최대 60개까지 만들 수 있어요"); return; }
     setErr("");
+    if (!ack) { // 앞으로의 기존 예약과 겹치는지 먼저 확인 (예약은 자동 삭제하지 않음)
+      const q = await req("GET", `studio_reservations?select=id,user_name,user_class,date,studio_id,start_time,end_time&date=gte.${today()}&order=date.asc&limit=1000`);
+      if (!q.ok || !Array.isArray(q.data)) { setErr("기존 예약을 확인하지 못했어요. 다시 시도해주세요"); return; }
+      const hit = q.data.map(normT).filter(r => days.includes(dow(r.date)) && (sid === "ALL" || r.studio_id === sid) && r.start_time < t2 && r.end_time > t1);
+      if (hit.length) { setConf(hit); setAck(true); return; }
+    }
     onChange(c => ({ ...c, weekly: [...(c.weekly || []), { id: uid(), studio_id: sid, days, start: t1, end: t2, reason: reason.trim() || "강의", skip: [] }] }));
     setDays([]);
   };
@@ -1065,7 +1118,13 @@ function WeeklyRules({ cfg, onChange, studios }) {
         </div>
         <label style={labelStyle}>사유 (학생 화면에 표시)</label>
         <input value={reason} onChange={e => setReason(e.target.value)} maxLength={20} style={{ ...sel, marginBottom: 10 }} />
-        <button onClick={add} style={{ width: "100%", background: C.navy, color: "#fff", border: "none", borderRadius: 11, padding: 12, fontWeight: 800, cursor: "pointer", fontSize: 14 }}>+ 반복 강의 추가</button>
+        {conf.length > 0 && (
+          <div style={{ background: "#FFF7E0", border: `1.5px solid ${C.accent}`, borderRadius: 10, padding: "10px 14px", marginBottom: 10, fontSize: 12, color: "#8A6A12" }}>
+            <b>⚠️ 이 규칙과 겹치는 기존 예약이 {conf.length}건 있어요.</b> 추가해도 기존 예약은 지워지지 않고, 새 예약만 막혀요.
+            <div style={{ marginTop: 6, color: C.tx }}>{conf.slice(0, 6).map(r => <div key={r.id}>· {fmt(r.date)}({DAY[dow(r.date)]}) {r.start_time}~{r.end_time} {r.user_name}{tutTag(r.user_class)}</div>)}{conf.length > 6 && <div>… 외 {conf.length - 6}건</div>}</div>
+          </div>
+        )}
+        <button onClick={add} style={{ width: "100%", background: conf.length && ack ? C.err : C.navy, color: "#fff", border: "none", borderRadius: 11, padding: 12, fontWeight: 800, cursor: "pointer", fontSize: 14 }}>{conf.length && ack ? "예약이 있어도 반복 강의 추가" : "+ 반복 강의 추가"}</button>
       </div>
 
       {rules.length === 0 && <div style={{ fontSize: 12, color: C.light, textAlign: "center", padding: 8 }}>등록된 반복 강의가 없어요</div>}
@@ -1131,7 +1190,7 @@ function AdminDay({ date, setDate, dates, studios, res, locks, loading, onCancel
           </div>
         );
       })}
-      {lockFor && <LockSheet date={date} studio={lockFor} studios={studios} onClose={() => setLockFor(null)} onSubmit={onAddLock} />}
+      {lockFor && <LockSheet date={date} studio={lockFor} studios={studios} res={res} onClose={() => setLockFor(null)} onSubmit={onAddLock} />}
     </div>
   );
 }
@@ -1228,6 +1287,7 @@ export default function App() {
   // ── 자습실 설정: 서버가 유일한 기준. 이 기기의 저장값(localStorage)은 사용하지 않음 ──
   const [cfg, setCfg] = useState(makeDefaultCfg);
   const cfgRef = useRef(cfg);
+  const baseRef = useRef(null); // 서버에서 마지막으로 확인한 설정 (동시 수정 병합의 기준)
   const [cfgLoaded, setCfgLoaded] = useState(false);
   const [cfgSync, setCfgSync] = useState({ state: "loading", at: null, msg: "" });
   const dirtyRef = useRef(false);
@@ -1241,6 +1301,15 @@ export default function App() {
     try {
       do {
         pendingRef.current = false;
+        // 저장 직전에 서버를 확인: 다른 기기가 먼저 저장했다면 내 변경만 그 위에 합쳐서 저장
+        const pre = await readConfig();
+        if (pre.ok && pre.cfg && baseRef.current) {
+          const theirs = normalizeCfg(pre.cfg);
+          if (theirs.rev > baseRef.current.rev && theirs.rev !== cfgRef.current.rev) {
+            const merged = normalizeCfg({ ...mergeCfg(baseRef.current, cfgRef.current, theirs), rev: Math.max(Date.now(), theirs.rev + 1) });
+            cfgRef.current = merged; setCfg(merged); baseRef.current = theirs;
+          }
+        }
         const snap = cfgRef.current;
         const w = await upsertSetting("room_config", JSON.stringify(snap));
         if (!w.ok) throw new Error(`서버가 저장을 거부했어요 ${w.status || ""}`.trim());
@@ -1248,6 +1317,7 @@ export default function App() {
         if (!pendingRef.current && (!back.ok || !back.cfg || back.cfg.rev !== snap.rev)) throw new Error("서버에 반영됐는지 확인되지 않았어요");
       } while (pendingRef.current);
       dirtyRef.current = false;
+      baseRef.current = cfgRef.current;
       setCfgSync({ state: "ok", at: new Date(), msg: "" });
       return true;
     } catch (e) {
@@ -1283,10 +1353,11 @@ export default function App() {
     const r = await readConfig();
     if (!r.ok) { if (!savingRef.current) setCfgSync(s => ({ state: "fail", at: s.at, msg: "서버에 연결할 수 없어요" })); return; }
     setCfgLoaded(true);
+    if (!baseRef.current) baseRef.current = r.cfg ? normalizeCfg(r.cfg) : cfgRef.current;
     if (dirtyRef.current || savingRef.current) return; // 내가 저장 중이면 덮어쓰지 않음
     if (r.cfg) {
       const n = normalizeCfg(r.cfg);
-      if (n.rev > cfgRef.current.rev) { cfgRef.current = n; setCfg(n); } // 더 새로운 설정만 반영 (늦게 도착한 옛 응답이 덮어쓰지 않도록)
+      if (n.rev > cfgRef.current.rev) { cfgRef.current = n; setCfg(n); baseRef.current = n; } // 더 새로운 설정만 반영 (늦게 도착한 옛 응답이 덮어쓰지 않도록)
     }
     setCfgSync({ state: "ok", at: new Date(), msg: "" });
   }, []);
@@ -1295,7 +1366,7 @@ export default function App() {
     if (!entryOk) return;
     const tick = () => { pullCfg(); if (dirtyRef.current && !savingRef.current) flushCfg(); };
     tick();
-    const iv = setInterval(tick, 4000);
+    const iv = setInterval(() => { if (document.visibilityState !== "hidden") tick(); }, 4000); // 화면이 백그라운드면 요청 중단
     const onVis = () => { if (document.visibilityState === "visible") tick(); };
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("focus", tick);
@@ -1329,7 +1400,7 @@ export default function App() {
   useEffect(() => {
     if (!entryOk) return;
     loadDay(date, false);
-    const iv = setInterval(() => loadDay(date, true), 6000);
+    const iv = setInterval(() => { if (document.visibilityState !== "hidden") loadDay(date, true); }, 6000);
     const onVis = () => { if (document.visibilityState === "visible") loadDay(date, true); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
@@ -1348,10 +1419,10 @@ export default function App() {
 
   // ── 예약: 서버에서 최신 설정·예약·잠금을 다시 확인하고, 저장 후에도 검증 ──
   const onBook = useCallback(async payload => {
-    const r = await placeBooking(payload);
+    const r = await placeBooking(payload, 1200, admin);
     loadDay(payload.date, true);
     return r;
-  }, [loadDay]);
+  }, [loadDay, admin]);
 
   const cancelRes = useCallback(async id => {
     const r = await removeRow("studio_reservations", id);
@@ -1533,13 +1604,13 @@ export default function App() {
               <span style={{ fontSize: 11, color: C.light }}>{studio.runs ? `${studio.seats}석` : "운영 안 함"}</span>
               <button onClick={() => { pullCfg(); loadDay(date, false); }} style={{ marginLeft: "auto", background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "3px 9px", cursor: "pointer", fontSize: 10, color: C.mid }}>{dayLoading ? "불러오는 중…" : "새로고침"}</button>
             </div>
-            {day.ok === false && <ErrBox>예약 현황을 불러오지 못했어요. 새로고침을 눌러주세요.</ErrBox>}
+            {day.ok === false && <ErrBox>예약 현황을 불러오지 못했어요. 지금은 예약할 수 없어요. <button onClick={() => loadDay(date, false)} style={{ marginLeft: 6, background: C.err, color: "#fff", border: "none", borderRadius: 6, padding: "3px 9px", cursor: "pointer", fontSize: 11 }}>다시 시도</button></ErrBox>}
             <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
               {[["#ECFDF5", C.ok, "여유"], ["#FEF3C7", C.warn, "잔여 적음"], ["#FEE2E2", C.err, "마감"], ["#F1F3F9", "#A8B4CC", "잠금"]].map(([bg, c, l]) => (
                 <div key={l} style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: bg, border: `1px solid ${c}44` }} /><span style={{ fontSize: 10, color: C.light }}>{l}</span></div>
               ))}
             </div>
-            <TimeGrid studio={studio} studios={studios} date={date} res={dateRes} locks={dateLocks} isAdmin={admin} info={cfg.info} onBook={onBook} onAddLock={addLock} />
+            <TimeGrid studio={studio} studios={studios} date={date} res={dateRes} locks={dateLocks} isAdmin={admin} info={cfg.info} onBook={onBook} onAddLock={addLock} blocked={day.ok === false || day.date !== date} />
             <div style={{ fontSize: 10, color: C.light, marginTop: 10, textAlign: "right" }}>자동 동기화 · 설정 확인 {clock(cfgSync.at) || "…"}</div>
           </div>
 
