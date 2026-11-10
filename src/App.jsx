@@ -877,14 +877,14 @@ function ChalPhotoSheet({ post, admin, onClose, onDeleted }) {
 
 function ChalAdmin({ cfg, onSaved }) {
   const [name, setName] = useState(cfg.name || "8주 작도 챌린지");
-  const [start, setStart] = useState(cfg.start || ""); const [weeks, setWeeks] = useState(String(cfg.weeks || 8));
+  const [start, setStart] = useState(cfg.start || ""); const [weeks, setWeeks] = useState(String(cfg.weeks || 8)); const [goal, setGoal] = useState(String(cfg.goal || 5));
   const [active, setActive] = useState(!!cfg.active); const [msg, setMsg] = useState(null); const [busy, setBusy] = useState(false); const [usage, setUsage] = useState(null);
-  useEffect(() => { setName(cfg.name || "8주 작도 챌린지"); setStart(cfg.start || ""); setWeeks(String(cfg.weeks || 8)); setActive(!!cfg.active); }, [cfg.name, cfg.start, cfg.weeks, cfg.active]);
+  useEffect(() => { setName(cfg.name || "8주 작도 챌린지"); setStart(cfg.start || ""); setWeeks(String(cfg.weeks || 8)); setGoal(String(cfg.goal || 5)); setActive(!!cfg.active); }, [cfg.name, cfg.start, cfg.weeks, cfg.goal, cfg.active]);
   const loadUsage = useCallback(async () => { const r = await rpc("sj_admin_chal_usage", { p_token: AUTH.token }); if (r.ok) setUsage(r.data); }, []);
   useEffect(() => { loadUsage(); }, [loadUsage]);
   const save = async () => {
     setBusy(true); setMsg(null);
-    const r = await rpc("sj_admin_chal_cfg", { p_token: AUTH.token, p: { name, start, weeks: parseInt(weeks, 10), active } });
+    const r = await rpc("sj_admin_chal_cfg", { p_token: AUTH.token, p: { name, start, weeks: parseInt(weeks, 10), goal: parseInt(goal, 10), active } });
     setBusy(false);
     if (r.ok) { setMsg({ ok: true, t: "저장했어요" }); onSaved(); } else if (r.data.code !== "auth") setMsg({ ok: false, t: failMsg(r, "저장하지 못했어요") });
   };
@@ -897,11 +897,41 @@ function ChalAdmin({ cfg, onSaved }) {
       <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
         <div style={{ flex: 2 }}><label style={labelStyle}>시작일 (월요일)</label><input type="date" value={start} onChange={e => setStart(e.target.value)} style={inputStyle} /></div>
         <div style={{ flex: 1 }}><label style={labelStyle}>기간(주)</label><input type="number" min={1} max={30} value={weeks} onChange={e => setWeeks(e.target.value)} style={inputStyle} /></div>
+        <div style={{ flex: 1 }}><label style={labelStyle}>주 목표(일)</label><input type="number" min={1} max={7} value={goal} onChange={e => setGoal(e.target.value)} style={inputStyle} /></div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><Toggle on={active} onChange={setActive} color={C.ok} /><span style={{ fontSize: 13, color: C.mid }}>{active ? "진행 중 (학생이 인증을 올릴 수 있어요)" : "중지 (탭에 '준비 중'으로 표시)"}</span></div>
       {msg && <div style={{ fontSize: 12, color: msg.ok ? C.ok : C.err, marginBottom: 8, fontWeight: 700 }}>{msg.t}</div>}
       <button onClick={save} disabled={busy} style={{ background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>{busy ? "저장 중…" : "챌린지 설정 저장"}</button>
       <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요. 400MB가 넘으면 알려주세요)</div>
+    </div>
+  );
+}
+
+// 입장 코드 화면 아래에 보여주는 "이번 주 작도 챌린지 TOP 5" (입장 전에도 볼 수 있어요)
+function EntryRank() {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    let dead = false;
+    const go = async () => { const r = await rpc("sj_public_rank", {}, true); if (!dead && r.ok && r.data.show) setD(r.data); };
+    go();
+    const t = setInterval(() => { if (document.visibilityState !== "hidden") go(); }, 60000);
+    return () => { dead = true; clearInterval(t); };
+  }, []);
+  if (!d) return null;
+  const rows = rankRows(d.top, p => `${p.days}|${p.minutes}`);
+  const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
+  return (
+    <div style={{ marginTop: 18, background: "#ffffff10", borderRadius: 16, padding: "16px 16px 12px", border: "1px solid #ffffff22", textAlign: "left" }}>
+      <div style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>🏆 이번 주 작도 챌린지 TOP 5</div>
+      <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{d.name} · {d.week}주차 ({fmt(d.week_start)}~{fmt(d.week_end)}) · 주 {d.goal}일 이상 인증</div>
+      {rows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪</div>}
+      {rows.map(p => (
+        <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: "1px solid #ffffff14" }}>
+          <div style={{ width: 34, fontSize: p.rank <= 3 ? 20 : 13, fontWeight: 900, color: "#fff", textAlign: "center" }}>{medal(p.rank)}</div>
+          <div style={{ flex: 1, color: "#fff", fontWeight: 700, fontSize: 14 }}>{p.name}</div>
+          <div style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{p.days}일 · {fmtDur(p.minutes)}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -947,6 +977,7 @@ function ChallengeTab({ admin }) {
     const past = data.today > data.week_end;
     const wk = rankRows(data.ranking, p => `${p.days}|${p.minutes}`);
     const tt = rankRows(data.total, p => `${p.weeks_ok}|${p.days}|${p.minutes}`);
+    const goal = cfg.goal || 5;
     const mine = wk.find(p => p.name === me);
     const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
     const canPost = data.started && !data.ended;
@@ -954,8 +985,8 @@ function ChallengeTab({ admin }) {
       <div>
         <div style={{ background: C.navy, borderRadius: 16, padding: "16px 16px 14px", color: "#fff", marginBottom: 12 }}>
           <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {cfg.name}</div>
-          <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 5일 이상 인증 (월~일)` : `${fmt(cfg.start)}(월)에 시작해요`}</div>
-          {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.days}일 인증 · {fmtDur(mine.minutes)} · {mine.rank}등 {mine.days >= 5 ? "✅" : past ? "" : `(5일까지 ${5 - mine.days}일 남음)`}</div>}
+          <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 ${goal}일 이상 인증 (월~일)` : `${fmt(cfg.start)}(월)에 시작해요`}</div>
+          {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.days}일 인증 · {fmtDur(mine.minutes)} · {mine.rank}등 {mine.days >= goal ? "✅" : past ? "" : `(${goal}일까지 ${goal - mine.days}일 남음)`}</div>}
         </div>
         {canPost && <button onClick={() => setPosting(true)} style={{ width: "100%", background: C.blue, color: "#fff", border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: "pointer", marginBottom: 14 }}>📸 오늘 작도 인증 올리기</button>}
 
@@ -983,10 +1014,10 @@ function ChallengeTab({ admin }) {
                     <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}</div>
                     <div style={{ fontSize: 11, color: C.mid }}>{p.days}일 인증 · {p.posts}장 · {fmtDur(p.minutes)}</div>
                   </div>
-                  <Tag c={p.days >= 5 ? C.ok : past ? C.err : C.warn}>{p.days >= 5 ? "주5일 달성" : past ? "미달" : `${5 - p.days}일 더`}</Tag>
+                  <Tag c={p.days >= goal ? C.ok : past ? C.err : C.warn}>{p.days >= goal ? `주${goal}일 달성` : past ? "미달" : `${goal - p.days}일 더`}</Tag>
                 </div>
                 <div style={{ display: "flex", gap: 3, marginTop: 8 }}>
-                  {[0, 1, 2, 3, 4, 5, 6].map(i => <div key={i} style={{ flex: 1, height: 6, borderRadius: 3, background: i < p.days ? (p.days >= 5 ? C.ok : C.blue) : C.bg }} />)}
+                  {[0, 1, 2, 3, 4, 5, 6].map(i => <div key={i} style={{ flex: 1, height: 6, borderRadius: 3, background: i < p.days ? (p.days >= goal ? C.ok : C.blue) : C.bg }} />)}
                 </div>
               </div>
             ))}
@@ -996,7 +1027,7 @@ function ChallengeTab({ admin }) {
         {view === "total" && tt.length === 0 && <div style={{ textAlign: "center", padding: 30, color: C.mid, fontSize: 13 }}>아직 누적 기록이 없어요.</div>}
         {view === "total" && tt.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: 11, color: C.light }}>주 5일을 채운 주가 많은 순 → 인증일 → 작도시간 순이에요</div>
+            <div style={{ fontSize: 11, color: C.light }}>주 {goal}일을 채운 주가 많은 순 → 인증일 → 작도시간 순이에요</div>
             {tt.map(p => (
               <div key={p.name} style={{ background: C.card, border: `1px solid ${p.rank <= 3 ? C.accent : C.border}`, borderRadius: 13, padding: "11px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
@@ -1730,6 +1761,7 @@ export default function App() {
             {entryMsg && <div style={{ fontSize: 12, color: "#FF8A8A", marginBottom: 10 }}>⚠️ {entryMsg}</div>}
             <button onClick={tryEntry} style={{ width: "100%", background: C.accent, color: C.navy, border: "none", borderRadius: 11, padding: 13, fontWeight: 800, cursor: "pointer", fontSize: 15 }}>{entryBusy ? "확인 중…" : "입장하기"}</button>
           </div>
+          <EntryRank />
         </div>
       </div>
     );

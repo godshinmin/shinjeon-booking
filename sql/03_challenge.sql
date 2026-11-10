@@ -10,7 +10,11 @@ create table if not exists sj_private.chal_cfg (
   id int primary key default 1 check (id = 1),
   name text not null default '8주 작도 챌린지',
   start_date text, weeks int not null default 8, active boolean not null default false);
-insert into sj_private.chal_cfg (id) values (1) on conflict (id) do nothing;
+alter table sj_private.chal_cfg add column if not exists goal int not null default 5;
+-- 기본 설정: 다음 주 월요일 시작 · 8주 · 주 5일 이상 인증 · 진행 중 (관리자 화면에서 언제든 바꿀 수 있어요)
+insert into sj_private.chal_cfg (id, name, start_date, weeks, goal, active)
+values (1, '8주 작도 챌린지', ((date_trunc('week', now() at time zone 'Asia/Seoul')::date) + 7)::text, 8, 5, true)
+on conflict (id) do nothing;
 
 create table if not exists sj_private.chal_posts (
   id text primary key, name text not null, day text not null, sess int not null, minutes int not null,
@@ -33,7 +37,7 @@ begin
   if not sj_private.entry_ok(p_entry) then return sj_private.err('entry', '입장 코드 확인이 필요해요'); end if;
   select * into c from sj_private.chal_cfg where id = 1;
   if c.start_date is null or not c.active then
-    return jsonb_build_object('ok', true, 'configured', false, 'cfg', jsonb_build_object('name', c.name, 'start', c.start_date, 'weeks', c.weeks, 'active', c.active));
+    return jsonb_build_object('ok', true, 'configured', false, 'cfg', jsonb_build_object('name', c.name, 'start', c.start_date, 'weeks', c.weeks, 'goal', c.goal, 'active', c.active));
   end if;
   v_end := ((c.start_date::date + c.weeks * 7 - 1))::text;
   v_cur := least(greatest(sj_private.chal_week(c.start_date, v_today), 1), c.weeks);
@@ -48,7 +52,7 @@ begin
 
   select coalesce(jsonb_agg(jsonb_build_object('name', t.name, 'days', t.days, 'minutes', t.minutes, 'posts', t.posts, 'weeks_ok', t.weeks_ok)
            order by t.weeks_ok desc, t.days desc, t.minutes desc, t.name), '[]'::jsonb) into v_total
-    from (select p.name, sum(w.dn)::int as days, max(p.minutes)::int as minutes, max(p.posts)::int as posts, count(*) filter (where w.dn >= 5)::int as weeks_ok
+    from (select p.name, sum(w.dn)::int as days, max(p.minutes)::int as minutes, max(p.posts)::int as posts, count(*) filter (where w.dn >= c.goal)::int as weeks_ok
             from (select name, sum(minutes) as minutes, count(*) as posts from sj_private.chal_posts where day >= c.start_date and day <= v_end group by name) p
             join (select name, wk, count(distinct day) as dn from (select name, day, sj_private.chal_week(c.start_date, day) as wk from sj_private.chal_posts where day >= c.start_date and day <= v_end) z group by name, wk) w
               on w.name = p.name
@@ -59,7 +63,7 @@ begin
     from (select * from sj_private.chal_posts where day >= v_ws and day <= v_we order by created_at desc limit 300) t;
 
   return jsonb_build_object('ok', true, 'configured', true,
-    'cfg', jsonb_build_object('name', c.name, 'start', c.start_date, 'weeks', c.weeks, 'active', c.active),
+    'cfg', jsonb_build_object('name', c.name, 'start', c.start_date, 'weeks', c.weeks, 'goal', c.goal, 'active', c.active),
     'today', v_today, 'cur_week', v_cur, 'week', v_w, 'week_start', v_ws, 'week_end', v_we, 'started', v_today >= c.start_date, 'ended', v_today > v_end,
     'ranking', v_rank, 'total', v_total, 'feed', v_feed);
 end $$;
@@ -139,16 +143,17 @@ end $$;
 
 create or replace function public.sj_admin_chal_cfg(p_token text, p jsonb) returns jsonb
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
-declare v_name text := left(btrim(coalesce(p->>'name', '')), 30); v_start text := p->>'start'; v_weeks int; v_active boolean;
+declare v_name text := left(btrim(coalesce(p->>'name', '')), 30); v_start text := p->>'start'; v_weeks int; v_goal int; v_active boolean;
 begin
   if not sj_private.admin_ok(p_token) then return sj_private.err('auth', '관리자 로그인이 만료됐어요. 다시 로그인해주세요.'); end if;
   if v_name = '' then v_name := '작도 챌린지'; end if;
-  begin v_weeks := (p->>'weeks')::int; v_active := coalesce((p->>'active')::boolean, false); exception when others then return sj_private.err('bad', '설정 값을 확인해주세요.'); end;
+  begin v_weeks := (p->>'weeks')::int; v_goal := coalesce((p->>'goal')::int, 5); v_active := coalesce((p->>'active')::boolean, false); exception when others then return sj_private.err('bad', '설정 값을 확인해주세요.'); end;
   if v_weeks is null or v_weeks not between 1 and 30 then return sj_private.err('bad', '기간은 1~30주로 입력해주세요.'); end if;
+  if v_goal not between 1 and 7 then return sj_private.err('bad', '주 목표는 1~7일로 입력해주세요.'); end if;
   if coalesce(v_start, '') !~ '^\d{4}-\d{2}-\d{2}$' then return sj_private.err('bad', '시작일을 입력해주세요.'); end if;
   begin if extract(isodow from v_start::date) <> 1 then return sj_private.err('bad', '시작일은 월요일로 해주세요. (주 단위가 월~일이에요)'); end if;
   exception when others then return sj_private.err('bad', '시작일 형식이 올바르지 않아요.'); end;
-  update sj_private.chal_cfg set name = v_name, start_date = v_start, weeks = v_weeks, active = v_active where id = 1;
+  update sj_private.chal_cfg set name = v_name, start_date = v_start, weeks = v_weeks, goal = v_goal, active = v_active where id = 1;
   return jsonb_build_object('ok', true);
 end $$;
 
@@ -161,12 +166,28 @@ begin
   return jsonb_build_object('ok', true, 'count', r.n, 'bytes', r.b);
 end $$;
 
+-- 입장 코드 화면에서 보여줄 "이번 주 TOP 5" (사진 없음, 이름·인증일·작도시간만 공개)
+create or replace function public.sj_public_rank() returns jsonb
+language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
+declare c record; v_today text := (((now() at time zone 'Asia/Seoul')::date))::text; v_w int; v_ws text; v_we text; v jsonb;
+begin
+  select * into c from sj_private.chal_cfg where id = 1;
+  if c.start_date is null or not c.active or v_today < c.start_date then return jsonb_build_object('ok', true, 'show', false); end if;
+  v_w  := least(greatest(sj_private.chal_week(c.start_date, v_today), 1), c.weeks);
+  v_ws := ((c.start_date::date + (v_w - 1) * 7))::text;
+  v_we := ((c.start_date::date + (v_w - 1) * 7 + 6))::text;
+  select coalesce(jsonb_agg(jsonb_build_object('name', t.name, 'days', t.days, 'minutes', t.minutes) order by t.days desc, t.minutes desc, t.name), '[]'::jsonb) into v
+    from (select name, count(distinct day)::int as days, sum(minutes)::int as minutes from sj_private.chal_posts
+           where day >= v_ws and day <= v_we group by name order by 2 desc, 3 desc, 1 limit 5) t;
+  return jsonb_build_object('ok', true, 'show', true, 'name', c.name, 'week', v_w, 'week_start', v_ws, 'week_end', v_we, 'goal', c.goal, 'top', v);
+end $$;
+
 revoke all on all functions in schema sj_private from public, anon, authenticated;
 do $$
 declare f text;
 begin
   foreach f in array array['sj_chal_board(text,integer)', 'sj_chal_post(text,jsonb)', 'sj_chal_thumbs(text,jsonb)', 'sj_chal_photo(text,text)',
-    'sj_chal_del(text,text,text)', 'sj_admin_chal_del(text,text)', 'sj_admin_chal_cfg(text,jsonb)', 'sj_admin_chal_usage(text)']
+    'sj_chal_del(text,text,text)', 'sj_admin_chal_del(text,text)', 'sj_admin_chal_cfg(text,jsonb)', 'sj_admin_chal_usage(text)', 'sj_public_rank()']
   loop
     execute format('revoke all on function public.%s from public', f);
     execute format('grant execute on function public.%s to anon, authenticated', f);
