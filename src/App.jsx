@@ -875,30 +875,36 @@ function ChalPhotoSheet({ post, admin, onClose, onDeleted }) {
   );
 }
 
-function ChalAdmin({ cfg, onSaved }) {
-  const [name, setName] = useState(cfg.name || "8주 작도 챌린지");
-  const [start, setStart] = useState(cfg.start || ""); const [weeks, setWeeks] = useState(String(cfg.weeks || 8)); const [goal, setGoal] = useState(String(cfg.goal || 5));
+function ChalAdmin({ cfg, examDate, onSaved }) {
+  const [name, setName] = useState(cfg.name || "작도 챌린지");
+  const [start, setStart] = useState(cfg.start || ""); const [end, setEnd] = useState(cfg.end || examDate || ""); const [goal, setGoal] = useState(String(cfg.goal || 5));
   const [active, setActive] = useState(!!cfg.active); const [msg, setMsg] = useState(null); const [busy, setBusy] = useState(false); const [usage, setUsage] = useState(null);
-  useEffect(() => { setName(cfg.name || "8주 작도 챌린지"); setStart(cfg.start || ""); setWeeks(String(cfg.weeks || 8)); setGoal(String(cfg.goal || 5)); setActive(!!cfg.active); }, [cfg.name, cfg.start, cfg.weeks, cfg.goal, cfg.active]);
+  useEffect(() => { setName(cfg.name || "작도 챌린지"); setStart(cfg.start || ""); setEnd(cfg.end || examDate || ""); setGoal(String(cfg.goal || 5)); setActive(!!cfg.active); }, [cfg.name, cfg.start, cfg.end, cfg.goal, cfg.active, examDate]);
   const loadUsage = useCallback(async () => { const r = await rpc("sj_admin_chal_usage", { p_token: AUTH.token }); if (r.ok) setUsage(r.data); }, []);
   useEffect(() => { loadUsage(); }, [loadUsage]);
+  const days = start && end ? Math.round((new Date(end + "T12:00:00") - new Date(start + "T12:00:00")) / 86400000) + 1 : 0;
+  const weeks = days > 0 ? Math.ceil(days / 7) : 0;
   const save = async () => {
     setBusy(true); setMsg(null);
-    const r = await rpc("sj_admin_chal_cfg", { p_token: AUTH.token, p: { name, start, weeks: parseInt(weeks, 10), goal: parseInt(goal, 10), active } });
+    const r = await rpc("sj_admin_chal_cfg", { p_token: AUTH.token, p: { name, start, end, goal: parseInt(goal, 10), active } });
     setBusy(false);
     if (r.ok) { setMsg({ ok: true, t: "저장했어요" }); onSaved(); } else if (r.data.code !== "auth") setMsg({ ok: false, t: failMsg(r, "저장하지 못했어요") });
   };
   const mb = usage ? (usage.bytes / 1048576).toFixed(1) : "-";
   return (
-    <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.border}`, marginTop: 18 }}>
-      <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, marginBottom: 12 }}>⚙️ 챌린지 설정 (관리자)</div>
+    <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.border}`, marginBottom: 18 }}>
+      <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, marginBottom: 12 }}>✍️ 작도 챌린지 설정</div>
       <label style={labelStyle}>챌린지 이름</label>
       <input value={name} onChange={e => setName(e.target.value)} maxLength={30} style={{ ...inputStyle, marginBottom: 10 }} />
-      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-        <div style={{ flex: 2 }}><label style={labelStyle}>시작일 (월요일)</label><input type="date" value={start} onChange={e => setStart(e.target.value)} style={inputStyle} /></div>
-        <div style={{ flex: 1 }}><label style={labelStyle}>기간(주)</label><input type="number" min={1} max={30} value={weeks} onChange={e => setWeeks(e.target.value)} style={inputStyle} /></div>
-        <div style={{ flex: 1 }}><label style={labelStyle}>주 목표(일)</label><input type="number" min={1} max={7} value={goal} onChange={e => setGoal(e.target.value)} style={inputStyle} /></div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 6 }}>
+        <div style={{ flex: 1 }}><label style={labelStyle}>시작일</label><input type="date" value={start} onChange={e => setStart(e.target.value)} style={inputStyle} /></div>
+        <div style={{ flex: 1 }}><label style={labelStyle}>종료일</label><input type="date" value={end} onChange={e => setEnd(e.target.value)} style={inputStyle} /></div>
       </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        {examDate && <button onClick={() => setEnd(examDate)} style={{ border: `1px solid ${C.border}`, background: C.bg, borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, color: C.mid, cursor: "pointer" }}>종료일을 시험일({fmt(examDate)})로</button>}
+        <span style={{ fontSize: 12, color: C.light }}>{weeks > 0 ? `총 ${days}일 · ${weeks}주 (시작일부터 7일씩 1주차)` : "날짜를 선택해주세요"}</span>
+      </div>
+      <div style={{ marginBottom: 10 }}><label style={labelStyle}>주 목표 (일)</label><input type="number" min={1} max={7} value={goal} onChange={e => setGoal(e.target.value)} style={{ ...inputStyle, width: 100 }} /></div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><Toggle on={active} onChange={setActive} color={C.ok} /><span style={{ fontSize: 13, color: C.mid }}>{active ? "진행 중 (학생이 인증을 올릴 수 있어요)" : "중지 (탭에 '준비 중'으로 표시)"}</span></div>
       {msg && <div style={{ fontSize: 12, color: msg.ok ? C.ok : C.err, marginBottom: 8, fontWeight: 700 }}>{msg.t}</div>}
       <button onClick={save} disabled={busy} style={{ background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>{busy ? "저장 중…" : "챌린지 설정 저장"}</button>
@@ -906,6 +912,20 @@ function ChalAdmin({ cfg, onSaved }) {
       {usage && usage.bytes > 350 * 1048576 && <div style={{ fontSize: 12, color: C.err, fontWeight: 800, marginTop: 6 }}>⚠️ 용량이 {Math.round(usage.bytes / 5242880)}% 찼어요. 500MB가 넘으면 예약 저장도 멈춰요. 오래된 사진을 지우거나 유료 전환이 필요해요.</div>}
     </div>
   );
+}
+
+// 관리 탭 안의 "작도 챌린지" 설정 화면
+function ChalSettings({ examDate }) {
+  const [cfg, setCfg] = useState(null); const [fail, setFail] = useState("");
+  const load = useCallback(async () => {
+    const r = await rpc("sj_chal_board", { p_entry: AUTH.entry, p_week: null });
+    if (!r.ok) { setFail(failMsg(r, "챌린지 설정을 불러오지 못했어요")); return; }
+    setFail(""); setCfg(r.data.cfg);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (fail) return <div style={{ background: "#FFF1F0", color: C.err, borderRadius: 10, padding: 12, fontSize: 12 }}>{fail} <button onClick={load} style={{ border: "none", background: "none", color: C.blue, fontWeight: 700, cursor: "pointer" }}>다시 시도</button></div>;
+  if (!cfg) return <div style={{ textAlign: "center", padding: 30, color: C.mid }}>⏳ 불러오는 중…</div>;
+  return <ChalAdmin cfg={cfg} examDate={examDate} onSaved={load} />;
 }
 
 // 입장 코드 화면 아래 순위판: 이번 주 자습실 이용 TOP 5 + 작도 챌린지 전체 TOP 5 (입장 전에도 볼 수 있고, 이름은 가려서 보여줘요)
@@ -1124,7 +1144,6 @@ function ChallengeTab({ admin }) {
     <div>
       {fail && <div style={{ background: "#FFF1F0", color: C.err, borderRadius: 10, padding: 12, fontSize: 12, marginBottom: 12 }}>{fail} <button onClick={load} style={{ border: "none", background: "none", color: C.blue, fontWeight: 700, cursor: "pointer" }}>다시 시도</button></div>}
       {body}
-      {admin && cfg && <ChalAdmin cfg={cfg} onSaved={() => { setWeek(null); load(); }} />}
       {posting && <ChalPostSheet title={cfg ? cfg.name : ""} onClose={() => setPosting(false)} onDone={() => { setPosting(false); setWeek(null); load(); }} />}
       {open && <ChalPhotoSheet post={open} admin={admin} onClose={() => setOpen(null)} onDeleted={() => { setOpen(null); load(); }} />}
     </div>
@@ -1585,6 +1604,7 @@ export default function App() {
   const [admin, setAdmin] = useState(false);
   const [pw, setPw] = useState(""); const [pwErr, setPwErr] = useState(""); const [loginBusy, setLoginBusy] = useState(false);
   const [showChgPw, setShowChgPw] = useState(false);
+  const [adminSub, setAdminSub] = useState("rooms");
   useEffect(() => {
     hooks.adminFail = () => { if (!AUTH.token) return; AUTH.token = ""; setAdmin(false); setNotice({ kind: "err", text: "관리자 로그인이 만료됐어요. 다시 로그인해주세요" }); };
     hooks.entryFail = () => {
@@ -1959,6 +1979,12 @@ export default function App() {
         {tab === "admin" && (admin ? (
           <div>
             <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 12 }}>관리자 모드</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              {[["rooms", "🏢 자습실 관리"], ["chal", "✍️ 작도 챌린지"]].map(([k, l]) => <button key={k} onClick={() => setAdminSub(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13,
+                border: `1.5px solid ${adminSub === k ? C.blue : C.border}`, background: adminSub === k ? C.blue : C.card, color: adminSub === k ? "#fff" : C.mid }}>{l}</button>)}
+            </div>
+            {adminSub === "chal" && <ChalSettings examDate={cfg.dday.date || ""} />}
+            {adminSub === "rooms" && <>
             <RoomSettings cfg={cfg} onChange={changeCfg} sync={cfgSync} onRetry={flushCfg} />
             <BoardSettings cfg={cfg} onChange={changeCfg} />
             <WeeklyRules cfg={cfg} onChange={changeCfg} studios={studios} />
@@ -1966,6 +1992,7 @@ export default function App() {
               onCancelRes={adminCancelRes} onDelLock={delLock} onAddLock={addLock} onSkipRule={skipRule} />
             <button onClick={() => setShowChgPw(true)} style={{ marginTop: 6, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", cursor: "pointer", fontSize: 12, color: C.mid, fontWeight: 600 }}>🔑 관리자 비밀번호 변경</button>
             <Diagnostics />
+            </>}
             <div style={{ height: 90 }} />
             <SaveBar sync={cfgSync} busy={saveBusy} onSave={saveNow} />
           </div>
