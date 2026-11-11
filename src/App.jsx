@@ -807,6 +807,7 @@ function ChalPostSheet({ title, onClose, onDone }) {
     <Sheet onClose={busy ? () => {} : onClose}>
       <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 4 }}>📸 작도 인증 올리기</div>
       <div style={{ fontSize: 12, color: C.mid, marginBottom: 16 }}>{title} · 하루에 몰아서 올리는 건 1일로 계산돼요</div>
+      <div style={{ fontSize: 11, color: C.err, background: "#FFF8E6", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.5 }}>📦 서버 용량을 아끼기 위해 <b>올린 지 3주가 지난 사진은 작은 사진으로 바뀌고 확대할 수 없어요.</b> (인증 횟수·순위는 그대로예요)</div>
       {err && <ErrBox>{err}</ErrBox>}
       <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
         <div><label style={labelStyle}>이름 *</label><input value={name} onChange={e => setName(e.target.value)} placeholder="홍길동" style={inputStyle} /></div>
@@ -845,6 +846,7 @@ function ChalPostSheet({ title, onClose, onDone }) {
 function ChalPhotoSheet({ post, admin, onClose, onDeleted }) {
   const [photo, setPhoto] = useState(""); const [pw, setPw] = useState(""); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   useEffect(() => {
+    if (post.arch) return undefined;
     let dead = false;
     (async () => {
       const r = await rpc("sj_chal_photo", { p_entry: AUTH.entry, p_id: post.id }, true);
@@ -852,7 +854,7 @@ function ChalPhotoSheet({ post, admin, onClose, onDeleted }) {
       if (r.ok) setPhoto(r.data.photo); else setErr(failMsg(r, "사진을 불러오지 못했어요"));
     })();
     return () => { dead = true; };
-  }, [post.id]);
+  }, [post.id, post.arch]);
   const del = async () => {
     if (!admin && !/^\d{4}$/.test(pw)) return setErr("비밀번호 4자리를 입력해주세요");
     setBusy(true); setErr("");
@@ -865,7 +867,12 @@ function ChalPhotoSheet({ post, admin, onClose, onDeleted }) {
     <Sheet onClose={busy ? () => {} : onClose}>
       <div style={{ fontSize: 16, fontWeight: 900, color: C.navy, marginBottom: 2 }}>{post.name}</div>
       <div style={{ fontSize: 12, color: C.mid, marginBottom: 12 }}>{fmt(post.day)} {post.at} · {SESS_LABEL[post.sess]} · {post.minutes}분</div>
-      {photo ? <img src={photo} alt="작도 사진" style={{ width: "100%", borderRadius: 10, background: C.bg }} /> : !err && <div style={{ textAlign: "center", padding: 40, color: C.mid }}>⏳ 사진 불러오는 중…</div>}
+      {post.arch ? (
+        <div style={{ textAlign: "center" }}>
+          {thumbCache.get(post.id) && <img src={thumbCache.get(post.id)} alt="작도 사진(축소)" style={{ width: 160, borderRadius: 10, background: C.bg }} />}
+          <div style={{ fontSize: 12, color: C.mid, marginTop: 8 }}>올린 지 3주가 지나 작은 사진만 남아 있어요 (확대 불가)</div>
+        </div>
+      ) : photo ? <img src={photo} alt="작도 사진" style={{ width: "100%", borderRadius: 10, background: C.bg }} /> : !err && <div style={{ textAlign: "center", padding: 40, color: C.mid }}>⏳ 사진 불러오는 중…</div>}
       {err && <div style={{ marginTop: 10 }}><ErrBox>{err}</ErrBox></div>}
       <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
         {!admin && <input type="password" inputMode="numeric" maxLength={4} value={pw} onChange={e => setPw(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="삭제용 비밀번호" style={{ ...inputStyle, padding: "10px 12px", fontSize: 13, flex: 1 }} />}
@@ -909,7 +916,8 @@ function ChalAdmin({ cfg, examDate, onSaved }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><Toggle on={active} onChange={setActive} color={C.ok} /><span style={{ fontSize: 13, color: C.mid }}>{active ? "진행 중 (학생이 인증을 올릴 수 있어요)" : "중지 (탭에 '준비 중'으로 표시)"}</span></div>
       {msg && <div style={{ fontSize: 12, color: msg.ok ? C.ok : C.err, marginBottom: 8, fontWeight: 700 }}>{msg.t}</div>}
       <button onClick={save} disabled={busy} style={{ background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>{busy ? "저장 중…" : "챌린지 설정 저장"}</button>
-      <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요)</div>
+      <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>🗜 올린 지 3주가 지난 사진은 자동으로 작은 사진(확대 불가)이 돼요. <button onClick={async () => { const r = await rpc("sj_admin_chal_purge", { p_token: AUTH.token }); if (r.ok) { setMsg({ ok: true, t: `${r.data.n}장을 작은 사진으로 줄였어요` }); loadUsage(); } }} style={{ border: `1px solid ${C.border}`, background: C.bg, borderRadius: 7, padding: "3px 8px", fontSize: 11, fontWeight: 700, color: C.mid, cursor: "pointer" }}>지금 정리하기</button></div>
+      <div style={{ fontSize: 11, color: C.light, marginTop: 6, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요)</div>
       {usage && usage.bytes > 350 * 1048576 && <div style={{ fontSize: 12, color: C.err, fontWeight: 800, marginTop: 6 }}>⚠️ 용량이 {Math.round(usage.bytes / 5242880)}% 찼어요. 500MB가 넘으면 예약 저장도 멈춰요. 오래된 사진을 지우거나 유료 전환이 필요해요.</div>}
     </div>
   );
@@ -1011,7 +1019,7 @@ function Gallery({ names, onOpen, reloadKey }) {
         {items.map(f => (
           <button key={f.id} onClick={() => onOpen(f)} style={{ position: "relative", padding: 0, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.bg, cursor: "pointer", aspectRatio: "1 / 1" }}>
             {thumbs[f.id] ? <img src={thumbs[f.id]} alt={`${f.name} 작도`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.light, fontSize: 11 }}>…</div>}
-            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#000000AA", color: "#fff", fontSize: 10, padding: "3px 5px", textAlign: "left", lineHeight: 1.3 }}>{f.name} · {fmt(f.day)}<br />{SESS_LABEL[f.sess]} · {f.minutes}분</div>
+            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#000000AA", color: "#fff", fontSize: 10, padding: "3px 5px", textAlign: "left", lineHeight: 1.3 }}>{f.name} · {fmt(f.day)}{f.arch ? " · 축소" : ""}<br />{SESS_LABEL[f.sess]} · {f.minutes}분</div>
           </button>
         ))}
       </div>
