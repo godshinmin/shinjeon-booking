@@ -1814,6 +1814,12 @@ export default function App() {
     if (t) rpc("sj_admin_logout", { p_token: t }, true);
     setAdmin(false); setDate(today());
   };
+  const leaveAll = () => { // 처음 화면(입장 코드)으로: 관리자 로그아웃 + 입장 코드 지움
+    const t = AUTH.token; AUTH.token = ""; AUTH.entry = "";
+    if (t) rpc("sj_admin_logout", { p_token: t }, true);
+    try { localStorage.removeItem("sj_booking_entry_code"); } catch {}
+    setAdmin(false); setEntryOk(false); setEntryInput(""); setEntryMsg(""); setDate(today());
+  };
   const changeAdminPw = async (cur, next) => {
     const r = await rpc("sj_admin_change_pw", { p_token: AUTH.token, p_cur: cur, p_new: next });
     return r.ok ? { ok: true } : { ok: false, msg: failMsg(r, "변경에 실패했어요") };
@@ -1874,6 +1880,7 @@ export default function App() {
           <Tag c={connOk ? C.ok : C.err}>{connOk ? "서버 연결됨" : cfgSync.state === "loading" ? "연결 중…" : "연결 끊김"}</Tag>
           {admin && <Tag c={C.accent}>관리자</Tag>}
           {admin && <button onClick={logoutAdmin} style={{ background: "transparent", border: "1px solid #344060", borderRadius: 7, color: "#a0b0cc", padding: "4px 9px", cursor: "pointer", fontSize: 11 }}>로그아웃</button>}
+          <button onClick={leaveAll} style={{ background: "transparent", border: "1px solid #344060", borderRadius: 7, color: "#a0b0cc", padding: "4px 9px", cursor: "pointer", fontSize: 11 }}>처음으로</button>
         </div>
       </header>
 
