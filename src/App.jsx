@@ -192,6 +192,7 @@ const getAdminDates = () => Array.from({ length: 14 }, (_, i) => { const d = new
 
 // 이미 지나간 시간인지 (지난 시간은 예약 불가 → 랭킹 시간 조작·실수 방지)
 const isPastSlot = (date, slot) => date < today() || (date === today() && add30(slot) <= nowHM());
+const addDays = (ds, n) => { const d = new Date(ds + "T12:00:00"); d.setDate(d.getDate() + n); return toStr(d); };
 const daysUntil = ds => Math.round((new Date(ds + "T00:00:00") - new Date(today() + "T00:00:00")) / 86400000);
 
 const overlaps = (r, slot) => r.start_time < add30(slot) && r.end_time > slot;
@@ -961,8 +962,8 @@ function EntryRank() {
       </div>
       {chal && (
         <div style={box}>
-          <div style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>✍️ {chal.name} 전체 TOP 5</div>
-          <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `인증 사진을 많이 올린 순 · 총 ${chal.total_posts}장` : `${fmt(chal.start)}(월) 시작`}</div>
+          <div style={{ color: "#fff", fontSize: 14, fontWeight: 800, display: "flex", justifyContent: "space-between" }}><span>✍️ {chal.name} 전체 TOP 5</span>{chal.end && daysUntil(chal.end) >= 0 && <span style={{ color: C.accent }}>{daysUntil(chal.end) === 0 ? "D-DAY" : `D-${daysUntil(chal.end)}`}</span>}</div>
+          <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `인증 사진을 많이 올린 순 · 총 ${chal.total_posts}장` : `${fmt(chal.start)}(${DAY[new Date(chal.start + "T12:00:00").getDay()]}) 시작`}</div>
           {chalRows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>{chal.started ? "아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪" : "시작하면 이곳에 순위가 나와요"}</div>}
           {chalRows.map(p => line(p.name, p.rank, p.name, `${p.posts}장 · ${fmtDur(p.minutes)}`))}
         </div>
@@ -1067,8 +1068,11 @@ function ChallengeTab({ admin }) {
     return (
       <div>
         <div style={{ background: C.navy, borderRadius: 16, padding: "16px 16px 14px", color: "#fff", marginBottom: 12 }}>
-          <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {cfg.name}</div>
-          <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 ${goal}일 이상 인증 (월~일)` : `${fmt(cfg.start)}(월)에 시작해요`}</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {cfg.name}</div>
+            {cfg.end && daysUntil(cfg.end) >= 0 && <div style={{ background: C.accent, color: C.navy, borderRadius: 9, padding: "3px 10px", fontSize: 13, fontWeight: 900, whiteSpace: "nowrap" }}>{daysUntil(cfg.end) === 0 ? "D-DAY" : `D-${daysUntil(cfg.end)}`}</div>}
+          </div>
+          <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{cfg.end ? `${fmt(cfg.start)} ~ ${fmt(cfg.end)} · ` : ""}{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 ${goal}일 이상 인증 (7일 단위)` : `${fmt(cfg.start)}(${DAY[new Date(cfg.start + "T12:00:00").getDay()]})에 시작해요`}</div>
           {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.days}일 인증 · {fmtDur(mine.minutes)} · {mine.rank}등 {mine.days >= goal ? "✅" : past ? "" : `(${goal}일까지 ${goal - mine.days}일 남음)`}</div>}
         </div>
         {canPost && <button onClick={() => setPosting(true)} style={{ width: "100%", background: C.blue, color: "#fff", border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: "pointer", marginBottom: 14 }}>📸 오늘 작도 인증 올리기</button>}
@@ -1099,8 +1103,17 @@ function ChallengeTab({ admin }) {
                   </div>
                   <Tag c={p.days >= goal ? C.ok : past ? C.err : C.warn}>{p.days >= goal ? `주${goal}일 달성` : past ? "미달" : `${goal - p.days}일 더`}</Tag>
                 </div>
-                <div style={{ display: "flex", gap: 3, marginTop: 8 }}>
-                  {[0, 1, 2, 3, 4, 5, 6].map(i => <div key={i} style={{ flex: 1, height: 6, borderRadius: 3, background: i < p.days ? (p.days >= goal ? C.ok : C.blue) : C.bg }} />)}
+                <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
+                  {[0, 1, 2, 3, 4, 5, 6].map(i => {
+                    const d = addDays(data.week_start, i); const inRange = d <= data.week_end; const on = (p.ds || []).includes(d); const wd = DAY[new Date(d + "T12:00:00").getDay()];
+                    return (
+                      <div key={i} style={{ flex: 1, textAlign: "center", opacity: inRange ? 1 : 0.25 }}>
+                        <div style={{ height: 18, borderRadius: 5, background: on ? (p.days >= goal ? C.ok : C.blue) : C.bg, border: `1px solid ${on ? "transparent" : C.border}`, color: "#fff", fontSize: 11, lineHeight: "18px", fontWeight: 900 }}>{on ? "✓" : ""}</div>
+                        <div style={{ fontSize: 9, color: d === data.today ? C.blue : C.light, fontWeight: d === data.today ? 900 : 400, marginTop: 2 }}>{wd}</div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ width: 34, textAlign: "right", fontSize: 12, fontWeight: 900, color: p.days >= goal ? C.ok : C.navy, alignSelf: "flex-start", lineHeight: "20px" }}>{p.days}/7</div>
                 </div>
               </div>
             ))}
