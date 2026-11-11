@@ -962,12 +962,12 @@ function EntryRank() {
   );
   return (
     <div>
-      <div style={box}>
+      {d.study_show !== false && <div style={box}>
         <div style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>📚 이번 주 자습실 이용 TOP 5</div>
-        <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{fmt(d.week_start)} ~ {fmt(d.week_end)} · 예약한 시간 합계</div>
+        <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{fmt(d.week_start)} ~ {fmt(d.week_end)} · 이용을 마친 시간 · 🏆 공부왕 랭킹과 같은 기준</div>
         {study.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>이번 주 첫 번째 주인공이 되어보세요! 💪</div>}
         {study.map(p => line(p.name, p.rank, p.name, fmtDur(p.minutes)))}
-      </div>
+      </div>}
       {chal && (
         <div style={box}>
           <div style={{ color: "#fff", fontSize: 14, fontWeight: 800, display: "flex", justifyContent: "space-between" }}><span>✍️ {chal.name} 전체 TOP 5</span>{chal.end && daysUntil(chal.end) >= 0 && <span style={{ color: C.accent }}>{daysUntil(chal.end) === 0 ? "D-DAY" : `D-${daysUntil(chal.end)}`}</span>}</div>
