@@ -902,36 +902,99 @@ function ChalAdmin({ cfg, onSaved }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><Toggle on={active} onChange={setActive} color={C.ok} /><span style={{ fontSize: 13, color: C.mid }}>{active ? "진행 중 (학생이 인증을 올릴 수 있어요)" : "중지 (탭에 '준비 중'으로 표시)"}</span></div>
       {msg && <div style={{ fontSize: 12, color: msg.ok ? C.ok : C.err, marginBottom: 8, fontWeight: 700 }}>{msg.t}</div>}
       <button onClick={save} disabled={busy} style={{ background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>{busy ? "저장 중…" : "챌린지 설정 저장"}</button>
-      <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요. 400MB가 넘으면 알려주세요)</div>
+      <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요)</div>
+      {usage && usage.bytes > 350 * 1048576 && <div style={{ fontSize: 12, color: C.err, fontWeight: 800, marginTop: 6 }}>⚠️ 용량이 {Math.round(usage.bytes / 5242880)}% 찼어요. 500MB가 넘으면 예약 저장도 멈춰요. 오래된 사진을 지우거나 유료 전환이 필요해요.</div>}
     </div>
   );
 }
 
-// 입장 코드 화면 아래에 보여주는 "이번 주 작도 챌린지 TOP 5" (입장 전에도 볼 수 있어요)
+// 입장 코드 화면 아래 순위판: 이번 주 자습실 이용 TOP 5 + 작도 챌린지 전체 TOP 5 (입장 전에도 볼 수 있고, 이름은 가려서 보여줘요)
 function EntryRank() {
   const [d, setD] = useState(null);
   useEffect(() => {
     let dead = false;
-    const go = async () => { const r = await rpc("sj_public_rank", {}, true); if (!dead && r.ok && r.data.show) setD(r.data); };
+    const go = async () => { const r = await rpc("sj_public_board", {}, true); if (!dead && r.ok && r.data.ok) setD(r.data); };
     go();
     const t = setInterval(() => { if (document.visibilityState !== "hidden") go(); }, 60000);
     return () => { dead = true; clearInterval(t); };
   }, []);
   if (!d) return null;
-  const rows = rankRows(d.top, p => `${p.days}|${p.minutes}`);
   const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
+  const box = { marginTop: 14, background: "#ffffff10", borderRadius: 16, padding: "16px 16px 12px", border: "1px solid #ffffff22", textAlign: "left" };
+  const study = rankRows(d.study || [], p => `${p.minutes}`);
+  const chal = d.chal && d.chal.show ? d.chal : null;
+  const chalRows = chal ? rankRows(chal.top || [], p => `${p.posts}|${p.minutes}`) : [];
+  const line = (k, r, name, val) => (
+    <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: "1px solid #ffffff14" }}>
+      <div style={{ width: 34, fontSize: r <= 3 ? 20 : 13, fontWeight: 900, color: "#fff", textAlign: "center" }}>{medal(r)}</div>
+      <div style={{ flex: 1, color: "#fff", fontWeight: 700, fontSize: 14 }}>{name}</div>
+      <div style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{val}</div>
+    </div>
+  );
   return (
-    <div style={{ marginTop: 18, background: "#ffffff10", borderRadius: 16, padding: "16px 16px 12px", border: "1px solid #ffffff22", textAlign: "left" }}>
-      <div style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>🏆 이번 주 작도 챌린지 TOP 5</div>
-      <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{d.name} · {d.week}주차 ({fmt(d.week_start)}~{fmt(d.week_end)}) · 주 {d.goal}일 이상 인증</div>
-      {rows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪</div>}
-      {rows.map(p => (
-        <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: "1px solid #ffffff14" }}>
-          <div style={{ width: 34, fontSize: p.rank <= 3 ? 20 : 13, fontWeight: 900, color: "#fff", textAlign: "center" }}>{medal(p.rank)}</div>
-          <div style={{ flex: 1, color: "#fff", fontWeight: 700, fontSize: 14 }}>{p.name}</div>
-          <div style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{p.days}일 · {fmtDur(p.minutes)}</div>
+    <div>
+      <div style={box}>
+        <div style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>📚 이번 주 자습실 이용 TOP 5</div>
+        <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{fmt(d.week_start)} ~ {fmt(d.week_end)} · 예약한 시간 합계</div>
+        {study.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>이번 주 첫 번째 주인공이 되어보세요! 💪</div>}
+        {study.map(p => line(p.name, p.rank, p.name, fmtDur(p.minutes)))}
+      </div>
+      {chal && (
+        <div style={box}>
+          <div style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>✍️ {chal.name} 전체 TOP 5</div>
+          <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `인증 사진을 많이 올린 순 · 총 ${chal.total_posts}장` : `${fmt(chal.start)}(월) 시작`}</div>
+          {chalRows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>{chal.started ? "아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪" : "시작하면 이곳에 순위가 나와요"}</div>}
+          {chalRows.map(p => line(p.name, p.rank, p.name, `${p.posts}장 · ${fmtDur(p.minutes)}`))}
         </div>
-      ))}
+      )}
+    </div>
+  );
+}
+
+// 전체 도면 갤러리: 모든 주·모든 사람 (이름으로 걸러보기, 45장씩 더 보기)
+function Gallery({ names, onOpen, reloadKey }) {
+  const [who, setWho] = useState(""); const [items, setItems] = useState([]); const [total, setTotal] = useState(0);
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [thumbs, setThumbs] = useState({}); const seq = useRef(0);
+  const fetchPage = useCallback(async (off, reset) => {
+    const id = ++seq.current; setBusy(true); setErr("");
+    const r = await rpc("sj_chal_gallery", { p_entry: AUTH.entry, p_name: who || null, p_off: off }, true);
+    if (id !== seq.current) return;
+    setBusy(false);
+    if (!r.ok) { setErr(failMsg(r, "도면을 불러오지 못했어요")); return; }
+    setTotal(r.data.total); setItems(prev => reset ? r.data.items : [...prev, ...r.data.items]);
+  }, [who]);
+  useEffect(() => { fetchPage(0, true); }, [fetchPage, reloadKey]);
+  useEffect(() => {
+    const ids = items.map(f => f.id); const need = ids.filter(id => !thumbCache.has(id));
+    const pull = () => setThumbs(Object.fromEntries(ids.filter(id => thumbCache.has(id)).map(id => [id, thumbCache.get(id)])));
+    pull(); if (!need.length) return undefined;
+    let dead = false;
+    (async () => {
+      for (let i = 0; i < need.length; i += 20) {
+        const r = await rpc("sj_chal_thumbs", { p_entry: AUTH.entry, p_ids: need.slice(i, i + 20) }, true);
+        if (r.ok && r.data.thumbs) for (const [k, v] of Object.entries(r.data.thumbs)) thumbCache.set(k, v);
+        if (dead) return; pull();
+      }
+    })();
+    return () => { dead = true; };
+  }, [items]);
+  return (
+    <div>
+      <select value={who} onChange={e => setWho(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }}>
+        <option value="">전체 ({total}장)</option>
+        {[...new Set(names)].sort().map(n => <option key={n} value={n}>{n}</option>)}
+      </select>
+      {err && <div style={{ fontSize: 12, color: C.err, marginBottom: 8 }}>{err}</div>}
+      {!busy && items.length === 0 && !err && <div style={{ textAlign: "center", padding: 30, color: C.mid, fontSize: 13 }}>아직 올라온 도면이 없어요</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+        {items.map(f => (
+          <button key={f.id} onClick={() => onOpen(f)} style={{ position: "relative", padding: 0, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.bg, cursor: "pointer", aspectRatio: "1 / 1" }}>
+            {thumbs[f.id] ? <img src={thumbs[f.id]} alt={`${f.name} 작도`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.light, fontSize: 11 }}>…</div>}
+            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#000000AA", color: "#fff", fontSize: 10, padding: "3px 5px", textAlign: "left", lineHeight: 1.3 }}>{f.name} · {fmt(f.day)}<br />{SESS_LABEL[f.sess]} · {f.minutes}분</div>
+          </button>
+        ))}
+      </div>
+      {items.length < total && <button onClick={() => fetchPage(items.length, false)} disabled={busy} style={{ width: "100%", marginTop: 12, padding: 12, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.mid, fontWeight: 800, cursor: "pointer" }}>{busy ? "불러오는 중…" : `더 보기 (${items.length}/${total})`}</button>}
     </div>
   );
 }
@@ -976,7 +1039,7 @@ function ChallengeTab({ admin }) {
     if (!data.configured) return <div style={{ textAlign: "center", padding: "36px 10px", color: C.mid, fontSize: 14, lineHeight: 1.8 }}>✍️ 작도 챌린지가 곧 시작돼요!<br />시작하면 이곳에서 인증 사진을 올리고<br />주간 순위를 확인할 수 있어요.</div>;
     const past = data.today > data.week_end;
     const wk = rankRows(data.ranking, p => `${p.days}|${p.minutes}`);
-    const tt = rankRows(data.total, p => `${p.weeks_ok}|${p.days}|${p.minutes}`);
+    const tt = rankRows(data.total, p => `${p.posts}|${p.minutes}`);
     const goal = cfg.goal || 5;
     const mine = wk.find(p => p.name === me);
     const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
@@ -991,7 +1054,7 @@ function ChallengeTab({ admin }) {
         {canPost && <button onClick={() => setPosting(true)} style={{ width: "100%", background: C.blue, color: "#fff", border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: "pointer", marginBottom: 14 }}>📸 오늘 작도 인증 올리기</button>}
 
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          {[["week", "주간 순위"], ["total", "누적 순위"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13,
+          {[["week", "주간 순위"], ["total", "누적 순위"], ["gallery", "📷 전체 도면"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13,
             border: `1.5px solid ${view === k ? C.blue : C.border}`, background: view === k ? C.blue : C.card, color: view === k ? "#fff" : C.mid }}>{l}</button>)}
         </div>
 
@@ -1027,13 +1090,13 @@ function ChallengeTab({ admin }) {
         {view === "total" && tt.length === 0 && <div style={{ textAlign: "center", padding: 30, color: C.mid, fontSize: 13 }}>아직 누적 기록이 없어요.</div>}
         {view === "total" && tt.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: 11, color: C.light }}>주 {goal}일을 채운 주가 많은 순 → 인증일 → 작도시간 순이에요</div>
+            <div style={{ fontSize: 11, color: C.light }}>인증 사진을 많이 올린 순 → 작도시간 순이에요</div>
             {tt.map(p => (
               <div key={p.name} style={{ background: C.card, border: `1px solid ${p.rank <= 3 ? C.accent : C.border}`, borderRadius: 13, padding: "11px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}</div>
-                  <div style={{ fontSize: 11, color: C.mid }}>총 {p.days}일 · {p.posts}장 · {fmtDur(p.minutes)}</div>
+                  <div style={{ fontSize: 11, color: C.mid }}>{p.posts}장 · 총 {p.days}일 · {fmtDur(p.minutes)}</div>
                 </div>
                 <Tag c={C.ok}>{p.weeks_ok}주 달성</Tag>
               </div>
@@ -1041,16 +1104,18 @@ function ChallengeTab({ admin }) {
           </div>
         )}
 
-        <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, margin: "22px 0 10px" }}>📷 {data.week}주차 인증 사진 <span style={{ fontSize: 11, fontWeight: 400, color: C.light }}>({feed.length}장)</span></div>
-        {feed.length === 0 && <div style={{ fontSize: 12, color: C.light }}>아직 올라온 사진이 없어요</div>}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+        {view === "gallery" && <Gallery names={data.total.map(t => t.name)} onOpen={setOpen} reloadKey={data.feed.length} />}
+
+        {view !== "gallery" && <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, margin: "22px 0 10px" }}>📷 {data.week}주차 인증 사진 <span style={{ fontSize: 11, fontWeight: 400, color: C.light }}>({feed.length}장)</span></div>}
+        {view !== "gallery" && feed.length === 0 && <div style={{ fontSize: 12, color: C.light }}>아직 올라온 사진이 없어요</div>}
+        {view !== "gallery" && <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
           {feed.map(f => (
             <button key={f.id} onClick={() => setOpen(f)} style={{ position: "relative", padding: 0, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.bg, cursor: "pointer", aspectRatio: "1 / 1" }}>
               {thumbs[f.id] ? <img src={thumbs[f.id]} alt={`${f.name} 작도`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.light, fontSize: 11 }}>…</div>}
               <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#000000AA", color: "#fff", fontSize: 10, padding: "3px 5px", textAlign: "left", lineHeight: 1.3 }}>{f.name}<br />{SESS_LABEL[f.sess]} · {f.minutes}분</div>
             </button>
           ))}
-        </div>
+        </div>}
       </div>
     );
   })();
