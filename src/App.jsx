@@ -980,18 +980,21 @@ function EntryRank() {
   );
 }
 
-// 전체 도면 갤러리: 모든 주·모든 사람 (이름으로 걸러보기, 45장씩 더 보기)
-function Gallery({ names, onOpen, reloadKey }) {
-  const [who, setWho] = useState(""); const [items, setItems] = useState([]); const [total, setTotal] = useState(0);
+// 도면 갤러리: "전체 도면"(모든 주·모든 사람, 이름으로 걸러보기) / "내 작도"(내 이름으로 모아보기). 45장씩 더 보기
+function Gallery({ names, onOpen, reloadKey, mineMode }) {
+  const saved = (() => { try { return normName(localStorage.getItem("sj_last_name") || ""); } catch { return ""; } })();
+  const [who, setWho] = useState(mineMode ? saved : ""); const [me, setMe] = useState(saved);
+  const [items, setItems] = useState([]); const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [thumbs, setThumbs] = useState({}); const seq = useRef(0);
   const fetchPage = useCallback(async (off, reset) => {
+    if (mineMode && !who) { setItems([]); setTotal(0); return; }
     const id = ++seq.current; setBusy(true); setErr("");
     const r = await rpc("sj_chal_gallery", { p_entry: AUTH.entry, p_name: who || null, p_off: off }, true);
     if (id !== seq.current) return;
     setBusy(false);
     if (!r.ok) { setErr(failMsg(r, "도면을 불러오지 못했어요")); return; }
     setTotal(r.data.total); setItems(prev => reset ? r.data.items : [...prev, ...r.data.items]);
-  }, [who]);
+  }, [who, mineMode]);
   useEffect(() => { fetchPage(0, true); }, [fetchPage, reloadKey]);
   useEffect(() => {
     const ids = items.map(f => f.id); const need = ids.filter(id => !thumbCache.has(id));
@@ -1007,19 +1010,38 @@ function Gallery({ names, onOpen, reloadKey }) {
     })();
     return () => { dead = true; };
   }, [items]);
+  const find = () => { const n = normName(me); if (n) { try { localStorage.setItem("sj_last_name", n); } catch {} setWho(n); } };
+  const box = { background: C.card, border: `1px solid ${C.border}`, borderRadius: 13, padding: 12, marginBottom: 12 };
   return (
     <div>
-      <select value={who} onChange={e => setWho(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }}>
-        <option value="">전체 ({total}장)</option>
-        {[...new Set(names)].sort().map(n => <option key={n} value={n}>{n}</option>)}
-      </select>
+      <div style={box}>
+        {mineMode ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={me} onChange={e => setMe(e.target.value)} onKeyDown={e => { if (e.key === "Enter") find(); }} placeholder="내 이름" style={{ ...inputStyle, flex: 1 }} />
+            <button onClick={find} style={{ background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "0 18px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>조회</button>
+          </div>
+        ) : (
+          <select value={who} onChange={e => setWho(e.target.value)} style={inputStyle}>
+            <option value="">모든 사람</option>
+            {[...new Set(names)].sort().map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        )}
+        <div style={{ fontSize: 12, color: C.mid, marginTop: 10, fontWeight: 700 }}>
+          {mineMode ? (who ? `${who} 님의 인증 ${total}장` : "이름을 입력하고 조회를 눌러주세요") : `${who ? `${who} 님` : "전체"} · 인증 ${total}장`}
+        </div>
+      </div>
       {err && <div style={{ fontSize: 12, color: C.err, marginBottom: 8 }}>{err}</div>}
-      {!busy && items.length === 0 && !err && <div style={{ textAlign: "center", padding: 30, color: C.mid, fontSize: 13 }}>아직 올라온 도면이 없어요</div>}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+      {!busy && items.length === 0 && !err && (!mineMode || who) && <div style={{ textAlign: "center", padding: 30, color: C.mid, fontSize: 13 }}>아직 올라온 도면이 없어요</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
         {items.map(f => (
-          <button key={f.id} onClick={() => onOpen(f)} style={{ position: "relative", padding: 0, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.bg, cursor: "pointer", aspectRatio: "1 / 1" }}>
-            {thumbs[f.id] ? <img src={thumbs[f.id]} alt={`${f.name} 작도`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.light, fontSize: 11 }}>…</div>}
-            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#000000AA", color: "#fff", fontSize: 10, padding: "3px 5px", textAlign: "left", lineHeight: 1.3 }}>{f.name} · {fmt(f.day)}{f.arch ? " · 축소" : ""}<br />{SESS_LABEL[f.sess]} · {f.minutes}분</div>
+          <button key={f.id} onClick={() => onOpen(f)} style={{ padding: 0, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.card, cursor: "pointer", textAlign: "left" }}>
+            <div style={{ aspectRatio: "4 / 3", background: C.bg }}>
+              {thumbs[f.id] ? <img src={thumbs[f.id]} alt={`${f.name} 작도`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.light, fontSize: 11 }}>…</div>}
+            </div>
+            <div style={{ padding: "8px 10px" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: C.navy }}>{f.name}{f.arch && <span style={{ fontSize: 10, fontWeight: 600, color: C.light }}> · 축소</span>}</div>
+              <div style={{ fontSize: 11, color: C.mid, marginTop: 2 }}>{fmt(f.day)} · {SESS_LABEL[f.sess]} · {f.minutes}분</div>
+            </div>
           </button>
         ))}
       </div>
@@ -1083,10 +1105,11 @@ function ChallengeTab({ admin }) {
           <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{cfg.end ? `${fmt(cfg.start)} ~ ${fmt(cfg.end)} · ` : ""}{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 ${goal}일 이상 인증 (7일 단위)` : `${fmt(cfg.start)}(${DAY[new Date(cfg.start + "T12:00:00").getDay()]})에 시작해요`}</div>
           {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.days}일 인증 · {fmtDur(mine.minutes)} · {mine.rank}등 {mine.days >= goal ? "✅" : past ? "" : `(${goal}일까지 ${goal - mine.days}일 남음)`}</div>}
         </div>
-        {canPost && <button onClick={() => setPosting(true)} style={{ width: "100%", background: C.blue, color: "#fff", border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: "pointer", marginBottom: 14 }}>📸 오늘 작도 인증 올리기</button>}
+        <button onClick={() => canPost && setPosting(true)} disabled={!canPost} style={{ width: "100%", background: canPost ? C.blue : C.border, color: canPost ? "#fff" : C.mid, border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: canPost ? "pointer" : "default", marginBottom: canPost ? 14 : 4 }}>{canPost ? "📸 오늘 작도 인증 올리기" : data.ended ? "챌린지가 끝났어요" : `📸 ${fmt(cfg.start)}부터 인증을 올릴 수 있어요`}</button>
+        {!canPost && !data.ended && <div style={{ fontSize: 11, color: C.light, textAlign: "center", marginBottom: 14 }}>시작일부터 이 자리에 인증 올리기 버튼이 활성화돼요</div>}
 
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          {[["week", "주간 순위"], ["total", "누적 순위"], ["gallery", "📷 전체 도면"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13,
+          {[["week", "주간 순위"], ["total", "누적 순위"], ["gallery", "📷 전체 도면"], ["mine", "🙋 내 작도"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 2px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 12,
             border: `1.5px solid ${view === k ? C.blue : C.border}`, background: view === k ? C.blue : C.card, color: view === k ? "#fff" : C.mid }}>{l}</button>)}
         </div>
 
@@ -1145,11 +1168,11 @@ function ChallengeTab({ admin }) {
           </div>
         )}
 
-        {view === "gallery" && <Gallery names={data.total.map(t => t.name)} onOpen={setOpen} reloadKey={data.feed.length} />}
+        {(view === "gallery" || view === "mine") && <Gallery key={view} mineMode={view === "mine"} names={data.total.map(t => t.name)} onOpen={setOpen} reloadKey={data.feed.length} />}
 
-        {view !== "gallery" && <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, margin: "22px 0 10px" }}>📷 {data.week}주차 인증 사진 <span style={{ fontSize: 11, fontWeight: 400, color: C.light }}>({feed.length}장)</span></div>}
-        {view !== "gallery" && feed.length === 0 && <div style={{ fontSize: 12, color: C.light }}>아직 올라온 사진이 없어요</div>}
-        {view !== "gallery" && <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+        {(view === "week" || view === "total") && <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, margin: "22px 0 10px" }}>📷 {data.week}주차 인증 사진 <span style={{ fontSize: 11, fontWeight: 400, color: C.light }}>({feed.length}장)</span></div>}
+        {(view === "week" || view === "total") && feed.length === 0 && <div style={{ fontSize: 12, color: C.light }}>아직 올라온 사진이 없어요</div>}
+        {(view === "week" || view === "total") && <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
           {feed.map(f => (
             <button key={f.id} onClick={() => setOpen(f)} style={{ position: "relative", padding: 0, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.bg, cursor: "pointer", aspectRatio: "1 / 1" }}>
               {thumbs[f.id] ? <img src={thumbs[f.id]} alt={`${f.name} 작도`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.light, fontSize: 11 }}>…</div>}
