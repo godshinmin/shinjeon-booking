@@ -166,7 +166,6 @@ const C = {
 const DAY = ["일", "월", "화", "수", "목", "금", "토"];
 // 담임 건축사 이름 정리 ("담임 홍길동 건축사" → "홍길동") / 표시용 태그
 const cleanTutor = v => String(v || "").replace(/^\s*담임\s*/, "").replace(/\s*건축사\s*$/, "").replace(/\s+/g, " ").trim().slice(0, 10);
-const maskName = s => { const t = [...String(s || "")]; return t.length <= 1 ? t.join("") : t.length === 2 ? t[0] + "○" : t[0] + "○".repeat(t.length - 2) + t[t.length - 1]; }; // 김철수 → 김○수
 const tutTag = c => (c ? ` (담임 ${c})` : "");
 const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); return toStr(d); };
 
@@ -716,7 +715,7 @@ function RankingTab({ since }) {
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{maskName(p.name)}{p.cls && <span style={{ fontWeight: 400, fontSize: 11, color: C.light }}> · 담임 {p.cls}</span>}</div>
+                  <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}{p.cls && <span style={{ fontWeight: 400, fontSize: 11, color: C.light }}> · 담임 {p.cls}</span>}</div>
                   <div style={{ fontSize: 11, color: C.mid }}>{p.days}일 이용</div>
                 </div>
                 <div style={{ fontWeight: 900, color: C.blue, fontSize: 15 }}>{fmtDur(p.minutes)}</div>
@@ -733,7 +732,7 @@ function RankingTab({ since }) {
           <div style={{ fontSize: 12, fontWeight: 800, color: C.mid, marginBottom: 8 }}>내 순위 찾기</div>
           <input value={me} onChange={e => setMe(e.target.value)} placeholder="이름 입력" style={{ width: "100%", padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${C.border}`, fontSize: 14, boxSizing: "border-box" }} />
           {q && mine.length === 0 && <div style={{ fontSize: 12, color: C.light, marginTop: 8 }}>이 기간에 이용 완료한 기록이 없어요</div>}
-          {mine.map(p => <div key={p.key} style={{ fontSize: 13, color: C.navy, marginTop: 8, fontWeight: 700 }}>{maskName(p.name)}{tutTag(p.cls)} — {p.rank}등 · {fmtDur(p.minutes)} · {p.days}일</div>)}
+          {mine.map(p => <div key={p.key} style={{ fontSize: 13, color: C.navy, marginTop: 8, fontWeight: 700 }}>{p.name}{tutTag(p.cls)} — {p.rank}등 · {fmtDur(p.minutes)} · {p.days}일</div>)}
         </div>
       )}
     </div>
