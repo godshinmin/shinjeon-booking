@@ -972,6 +972,129 @@ function ChalSettings({ examDate }) {
   return <ChalAdmin cfg={cfg} examDate={examDate} onSaved={load} />;
 }
 
+// 👀 둘러보기: 입장 코드 없이 구경만 (예약 현황·예약자·큰 사진은 보이지 않고, 예약·인증도 할 수 없어요)
+function GuestView({ onExit }) {
+  const [tab, setTab] = useState("book");
+  const [info, setInfo] = useState(null); const [chal, setChal] = useState(null); const [week, setWeek] = useState(null); const [view, setView] = useState("week"); const [fail, setFail] = useState("");
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const [r, l] = await Promise.all([rpc("sj_public_info", {}, true), rpc("sj_public_links", {}, true)]);
+      if (dead) return;
+      if (r.ok && r.data.ok) setInfo({ ...r.data, links: l.ok && l.data.ok ? l.data.links : {} }); else setFail("정보를 불러오지 못했어요");
+    })();
+    return () => { dead = true; };
+  }, []);
+  useEffect(() => {
+    if (tab !== "chal") return undefined;
+    let dead = false;
+    (async () => { const r = await rpc("sj_public_chal", { p_week: week }, true); if (!dead) { if (r.ok && r.data.ok) { setChal(r.data); setFail(""); } else setFail("챌린지 정보를 불러오지 못했어요"); } })();
+    return () => { dead = true; };
+  }, [tab, week]);
+  const links = info ? info.links : null;
+  const card = { background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 16, marginBottom: 12 };
+  const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
+  const dd = info && info.dday && info.dday.date ? daysUntil(info.dday.date) : null;
+  const rooms = info ? Object.entries(info.rooms || {}) : [];
+  const Book = () => (
+    <div>
+      {info && dd !== null && dd >= 0 && <div style={{ ...card, background: C.navy, color: "#fff", textAlign: "center" }}><div style={{ fontSize: 12, color: "#a0b0cc" }}>{info.dday.label || "건축사 시험"}</div><div style={{ fontSize: 26, fontWeight: 900, color: C.accent }}>{dd === 0 ? "D-DAY" : `D-${dd}`}</div></div>}
+      {info && info.notice && info.notice.text && <div style={{ ...card, background: "#FFF8E6" }}><div style={{ fontSize: 12, fontWeight: 800, color: C.navy, marginBottom: 4 }}>📢 공지</div><div style={{ fontSize: 12, color: C.mid, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{info.notice.text}</div></div>}
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 900, color: C.navy, marginBottom: 10 }}>🏢 자습실 안내</div>
+        {rooms.length === 0 && <div style={{ fontSize: 12, color: C.light }}>불러오는 중…</div>}
+        {rooms.map(([id, r]) => (
+          <div key={id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderTop: `1px solid ${C.bg}`, fontSize: 13 }}>
+            <span style={{ fontWeight: 800, color: C.navy }}>{r.name || `스튜디오 ${id}`}</span>
+            <span style={{ color: r.open ? C.ok : C.light, fontWeight: 700 }}>{r.open ? `${r.seats}석 운영` : "운영 안 함"}</span>
+          </div>
+        ))}
+        <div style={{ fontSize: 11, color: C.light, marginTop: 10, lineHeight: 1.7 }}>예약은 수강생 입장 코드로 입장한 뒤, 오늘부터 3일 뒤까지 시간대별로 할 수 있어요. (둘러보기에서는 예약 현황이 보이지 않아요)</div>
+      </div>
+      {info && info.info && info.info.trim() && <div style={card}><div style={{ fontSize: 12, fontWeight: 800, color: C.navy, marginBottom: 6 }}>📋 이용 안내</div><div style={{ fontSize: 11, color: C.mid, lineHeight: 2 }}>{info.info.split("\n").map((l, i) => <div key={i}>{l}</div>)}</div></div>}
+    </div>
+  );
+  const Chal = () => {
+    if (!chal) return <div style={{ textAlign: "center", padding: 40, color: C.mid }}>{fail || "⏳ 불러오는 중…"}</div>;
+    if (!chal.configured) return <div style={{ ...card, textAlign: "center", color: C.mid }}>✍️ 작도 챌린지가 곧 시작돼요!</div>;
+    const goal = chal.cfg.goal;
+    const wk = rankRows(chal.ranking, p => `${p.days}|${p.minutes}`);
+    const tt = rankRows(chal.total, p => `${p.posts}|${p.minutes}`);
+    return (
+      <div>
+        <div style={{ ...card, background: C.navy, color: "#fff" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {chal.cfg.name}</div>
+            {chal.cfg.end && daysUntil(chal.cfg.end) >= 0 && <div style={{ background: C.accent, color: C.navy, borderRadius: 9, padding: "3px 10px", fontSize: 13, fontWeight: 900 }}>{daysUntil(chal.cfg.end) === 0 ? "D-DAY" : `D-${daysUntil(chal.cfg.end)}`}</div>}
+          </div>
+          <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{fmt(chal.cfg.start)} ~ {fmt(chal.cfg.end)} · 주 {goal}일 이상 인증 · {chal.started ? `${chal.cur_week}/${chal.cfg.weeks}주차` : "곧 시작"}</div>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {[["week", "주간 순위"], ["total", "누적 순위"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13, border: `1.5px solid ${view === k ? C.blue : C.border}`, background: view === k ? C.blue : C.card, color: view === k ? "#fff" : C.mid }}>{l}</button>)}
+        </div>
+        {view === "week" && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <button onClick={() => setWeek(Math.max(1, chal.week - 1))} disabled={chal.week <= 1} style={{ border: `1px solid ${C.border}`, background: C.card, borderRadius: 9, padding: "7px 12px", cursor: "pointer", color: C.mid, opacity: chal.week <= 1 ? 0.4 : 1 }}>◀</button>
+            <div style={{ fontSize: 13, fontWeight: 800, color: C.navy }}>{chal.week}주차 <span style={{ fontWeight: 400, color: C.light, fontSize: 11 }}>({fmt(chal.week_start)} ~ {fmt(chal.week_end)})</span></div>
+            <button onClick={() => setWeek(Math.min(chal.cfg.weeks, chal.week + 1))} disabled={chal.week >= chal.cfg.weeks} style={{ border: `1px solid ${C.border}`, background: C.card, borderRadius: 9, padding: "7px 12px", cursor: "pointer", color: C.mid, opacity: chal.week >= chal.cfg.weeks ? 0.4 : 1 }}>▶</button>
+          </div>
+        )}
+        {(view === "week" ? wk : tt).length === 0 && <div style={{ ...card, textAlign: "center", color: C.mid, fontSize: 13 }}>아직 인증이 없어요</div>}
+        {(view === "week" ? wk : tt).map(p => (
+          <div key={p.name} style={{ ...card, padding: 12, marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 36, textAlign: "center", fontSize: p.rank <= 3 ? 22 : 14, fontWeight: 900, color: C.navy }}>{medal(p.rank)}</div>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}</div>
+                <div style={{ fontSize: 11, color: C.mid }}>{view === "week" ? `${p.days}일 · ${p.posts}장 · ${fmtDur(p.minutes)}` : `${p.posts}장 · 총 ${p.days}일 · ${fmtDur(p.minutes)}`}</div></div>
+            </div>
+            {view === "week" && (
+              <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
+                {[0, 1, 2, 3, 4, 5, 6].map(i => {
+                  const d = addDays(chal.week_start, i); const inRange = d <= chal.week_end; const on = (p.ds || []).includes(d);
+                  return (
+                    <div key={i} style={{ flex: 1, textAlign: "center", opacity: inRange ? 1 : 0.25 }}>
+                      <div style={{ height: 18, borderRadius: 5, background: on ? (p.days >= goal ? C.ok : C.blue) : C.bg, border: `1px solid ${on ? "transparent" : C.border}`, color: "#fff", fontSize: 11, lineHeight: "18px", fontWeight: 900 }}>{on ? "✓" : ""}</div>
+                      <div style={{ fontSize: 9, color: C.light, marginTop: 2 }}>{DAY[new Date(d + "T12:00:00").getDay()]}</div>
+                    </div>
+                  );
+                })}
+                <div style={{ width: 34, textAlign: "right", fontSize: 12, fontWeight: 900, color: p.days >= goal ? C.ok : C.navy, lineHeight: "20px" }}>{p.days}/7</div>
+              </div>
+            )}
+          </div>
+        ))}
+        <div style={{ fontSize: 15, fontWeight: 900, color: C.navy, margin: "20px 0 10px" }}>📷 {chal.week}주차 도면 구경 <span style={{ fontSize: 11, fontWeight: 400, color: C.light }}>({chal.feed_count}장 · 최근 {chal.feed.length}장)</span></div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+          {chal.feed.map(f => (
+            <div key={f.id} style={{ position: "relative", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.bg, aspectRatio: "1 / 1" }}>
+              <img src={f.thumb} alt="작도" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#000000AA", color: "#fff", fontSize: 10, padding: "3px 5px" }}>{fmt(f.day)} · {SESS_LABEL[f.sess]} · {f.minutes}분</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: C.light, textAlign: "center", marginTop: 14 }}>둘러보기에서는 작은 그림만 보여요. 확대·인증 올리기는 수강생 입장 후 할 수 있어요.</div>
+      </div>
+    );
+  };
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Noto Sans KR',sans-serif" }}>
+      <header style={{ background: C.navy, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ color: "#fff", fontWeight: 900, fontSize: 15 }}>🏛 신전스퀘어 <span style={{ fontSize: 11, color: C.accent, fontWeight: 700 }}>둘러보기</span></div>
+        <button onClick={onExit} style={{ background: C.accent, color: C.navy, border: "none", borderRadius: 8, padding: "6px 12px", fontWeight: 800, cursor: "pointer", fontSize: 12 }}>입장하기</button>
+      </header>
+      {links && LINK_DEFS.some(([k]) => links[k]) && <div style={{ padding: "10px 14px", background: C.bg, borderBottom: `1px solid ${C.border}` }}><LinkBar links={links} /></div>}
+      <div style={{ display: "flex", background: C.card, borderBottom: `1px solid ${C.border}` }}>
+        {[["book", "📅 자습실 안내"], ["chal", "✍️ 작도 챌린지"]].map(([k, l]) => <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: "13px 2px", border: "none", background: "none", cursor: "pointer", fontWeight: tab === k ? 800 : 400, fontSize: 13, color: tab === k ? C.blue : C.light, borderBottom: `2.5px solid ${tab === k ? C.blue : "transparent"}` }}>{l}</button>)}
+      </div>
+      <div style={{ maxWidth: 480, margin: "0 auto", padding: 16 }}>
+        <div style={{ fontSize: 11, color: C.mid, background: "#EEF3FF", borderRadius: 10, padding: "8px 12px", marginBottom: 12, textAlign: "center" }}>👀 구경만 할 수 있는 화면이에요. 예약·인증은 <b>입장</b> 후 가능해요.</div>
+        {tab === "book" ? Book() : Chal()}
+        <div style={{ height: 40 }} />
+      </div>
+    </div>
+  );
+}
+
 // 입장 코드 화면 아래 순위판: 이번 주 자습실 이용 TOP 5 + 작도 챌린지 전체 TOP 5 (입장 전에도 볼 수 있고, 이름은 가려서 보여줘요)
 function EntryRank() {
   const [d, setD] = useState(null);
@@ -1666,6 +1789,7 @@ function Diagnostics() {
 // ═════════════════════════════════════════════
 export default function App() {
   // ── 입장 코드 ──
+  const [guest, setGuest] = useState(false);
   const [entryOk, setEntryOk] = useState(false);
   const [entryChecked, setEntryChecked] = useState(false);
   const [entryInput, setEntryInput] = useState("");
@@ -1926,6 +2050,7 @@ export default function App() {
 
   // ── 입장 코드 화면 (모든 훅 호출 이후) ──
   if (!entryChecked) return null;
+  if (!entryOk && guest) return <GuestView onExit={() => setGuest(false)} />;
   if (!entryOk) {
     return (
       <div style={{ minHeight: "100vh", background: C.navy, fontFamily: "'Noto Sans KR',sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -1943,6 +2068,7 @@ export default function App() {
             {entryMsg && <div style={{ fontSize: 12, color: "#FF8A8A", marginBottom: 10 }}>⚠️ {entryMsg}</div>}
             <button onClick={tryEntry} style={{ width: "100%", background: C.accent, color: C.navy, border: "none", borderRadius: 11, padding: 13, fontWeight: 800, cursor: "pointer", fontSize: 15 }}>{entryBusy ? "확인 중…" : "입장하기"}</button>
           </div>
+          <button onClick={() => setGuest(true)} style={{ width: "100%", marginTop: 12, background: "transparent", color: "#fff", border: "1.5px solid #ffffff55", borderRadius: 11, padding: 12, fontWeight: 700, cursor: "pointer", fontSize: 14 }}>👀 입장 전에 둘러보기</button>
           <EntryLinks />
           <EntryRank />
         </div>
