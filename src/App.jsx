@@ -1001,15 +1001,25 @@ function GuestView({ onExit }) {
       {info && dd !== null && dd >= 0 && <div style={{ ...card, background: C.navy, color: "#fff", textAlign: "center" }}><div style={{ fontSize: 12, color: "#a0b0cc" }}>{info.dday.label || "건축사 시험"}</div><div style={{ fontSize: 26, fontWeight: 900, color: C.accent }}>{dd === 0 ? "D-DAY" : `D-${dd}`}</div></div>}
       {info && info.notice && info.notice.text && <div style={{ ...card, background: "#FFF8E6" }}><div style={{ fontSize: 12, fontWeight: 800, color: C.navy, marginBottom: 4 }}>📢 공지</div><div style={{ fontSize: 12, color: C.mid, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{info.notice.text}</div></div>}
       <div style={card}>
-        <div style={{ fontSize: 14, fontWeight: 900, color: C.navy, marginBottom: 10 }}>🏢 자습실 안내</div>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 900, color: C.navy }}>🏢 지금 예약 가능한 좌석</div>
+          {info && info.slot && <div style={{ fontSize: 11, color: C.light, fontWeight: 700 }}>{info.in_hours ? `${info.slot} 기준` : "운영 시간 09:00~22:00"}</div>}
+        </div>
         {rooms.length === 0 && <div style={{ fontSize: 12, color: C.light }}>불러오는 중…</div>}
         {rooms.map(([id, r]) => (
           <div key={id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderTop: `1px solid ${C.bg}`, fontSize: 13 }}>
             <span style={{ fontWeight: 800, color: C.navy }}>{r.name || `스튜디오 ${id}`}</span>
-            <span style={{ color: r.open ? C.ok : C.light, fontWeight: 700 }}>{r.open ? `${r.seats}석 운영` : "운영 안 함"}</span>
+            {(() => {
+              if (!r.open) return <span style={{ color: C.light, fontWeight: 700 }}>운영 안 함</span>;
+              if (typeof r.avail !== "number") return <span style={{ color: C.ok, fontWeight: 700 }}>{r.seats}석 운영</span>;
+              if (!info.in_hours) return <span style={{ color: C.light, fontWeight: 700 }}>운영 시간 아님</span>;
+              if (r.locked) return <span style={{ color: C.light, fontWeight: 700 }}>지금은 이용 불가</span>;
+              if (r.avail <= 0) return <span style={{ color: C.err, fontWeight: 800 }}>만석</span>;
+              return <span style={{ color: r.avail <= 3 ? C.warn : C.ok, fontWeight: 800 }}>{r.avail}석 <span style={{ color: C.light, fontWeight: 600, fontSize: 11 }}>/ {r.seats}석</span></span>;
+            })()}
           </div>
         ))}
-        <div style={{ fontSize: 11, color: C.light, marginTop: 10, lineHeight: 1.7 }}>예약은 수강생 입장 코드로 입장한 뒤, 오늘부터 3일 뒤까지 시간대별로 할 수 있어요. (둘러보기에서는 예약 현황이 보이지 않아요)</div>
+        <div style={{ fontSize: 11, color: C.light, marginTop: 10, lineHeight: 1.7 }}>예약은 수강생 입장 코드로 입장한 뒤, 오늘부터 3일 뒤까지 시간대별로 할 수 있어요. (둘러보기에서는 지금 남은 좌석 수만 보이고, 시간대별 예약 현황은 보이지 않아요)</div>
       </div>
       {info && info.info && info.info.trim() && <div style={card}><div style={{ fontSize: 12, fontWeight: 800, color: C.navy, marginBottom: 6 }}>📋 이용 안내</div><div style={{ fontSize: 11, color: C.mid, lineHeight: 2 }}>{info.info.split("\n").map((l, i) => <div key={i}>{l}</div>)}</div></div>}
     </div>
