@@ -344,16 +344,30 @@ const Toggle = ({ on, onChange, color }) => (
   </button>
 );
 
-function LinkBar({ links, dark }) {
+const DEFAULT_LINKS = { home: "https://shinjeonsquare.com", cafe: "https://cafe.naver.com/shinjeon", blog: "https://blog.naver.com/ahffkanjfkrhgo", kakao: "https://pf.kakao.com/_MKxiYG/chat" };
+const LINK_MASCOT = { home: ["board1", "홈페이지", "신전스퀘어 공식 사이트"], cafe: ["eraser1", "네이버 카페", "수강생 커뮤니티"], blog: ["pen1", "네이버 블로그", "합격 이야기·공지"], kakao: ["tri1", "카카오톡 상담", "1:1 문의하기"] };
+function LinkBar({ links: given, dark }) {
+  const links = Object.fromEntries(LINK_DEFS.map(([k]) => [k, cleanUrl(given?.[k]) || DEFAULT_LINKS[k]]));
   const items = LINK_DEFS.filter(([k]) => cleanUrl(links?.[k]));
   if (!items.length) return null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", margin: dark ? "14px 0 0" : "0" }}>
-      {items.map(([k, ic, label]) => (
-        <a key={k} href={cleanUrl(links[k])} target="_blank" rel="noopener noreferrer"
-          style={{ flex: "1 1 calc(50% - 8px)", minWidth: 120, boxSizing: "border-box", textAlign: "center", textDecoration: "none", padding: "10px 8px", borderRadius: 11, fontSize: 13, fontWeight: 800,
-            background: k === "kakao" ? "#FEE500" : dark ? "#ffffff14" : C.card, color: k === "kakao" ? "#191919" : dark ? "#fff" : C.navy, border: k === "kakao" ? "1px solid #FEE500" : dark ? "1px solid #ffffff2a" : `1px solid ${C.border}` }}>{ic} {label}</a>
-      ))}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, margin: dark ? "14px 0 0" : "0" }}>
+      {items.map(([k]) => {
+        const [img, t, sub] = LINK_MASCOT[k];
+        const kk = k === "kakao";
+        return (
+          <a key={k} href={cleanUrl(links[k])} target="_blank" rel="noopener noreferrer"
+            style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, boxSizing: "border-box", textDecoration: "none", padding: "8px 10px", borderRadius: 14,
+              background: kk ? "#FEE500" : dark ? "#ffffff14" : C.card, color: kk ? "#191919" : dark ? "#fff" : C.navy,
+              border: kk ? "1px solid #FEE500" : dark ? "1px solid #ffffff2a" : `1px solid ${C.border}`, boxShadow: dark ? "none" : "0 1px 4px #1B2B5A14" }}>
+            <img src={`/mascot/${img}.webp`} alt="" width={40} height={44} loading="lazy" style={{ width: 40, height: 44, objectFit: "contain", flexShrink: 0 }} />
+            <span style={{ minWidth: 0, textAlign: "left", lineHeight: 1.3 }}>
+              <span style={{ display: "block", fontSize: 13, fontWeight: 800, whiteSpace: "nowrap" }}>{t}</span>
+              <span style={{ display: "block", fontSize: 10, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sub}</span>
+            </span>
+          </a>
+        );
+      })}
     </div>
   );
 }
@@ -366,7 +380,7 @@ function EntryLinks() {
     (async () => { const r = await rpc("sj_public_links", {}, true); if (!dead && r.ok && r.data.ok) setLinks(r.data.links); })();
     return () => { dead = true; };
   }, []);
-  return links ? <LinkBar links={links} dark /> : null;
+  return <LinkBar links={links || {}} dark />;
 }
 
 function TextCommit({ value, onCommit, multiline, maxLength, style, placeholder, allowEmpty }) {
@@ -1087,12 +1101,12 @@ function GuestView({ onExit }) {
     );
   };
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Noto Sans KR',sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif" }}>
       <header style={{ background: C.navy, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ color: "#fff", fontWeight: 900, fontSize: 15 }}>🏛 신전스퀘어 <span style={{ fontSize: 11, color: C.accent, fontWeight: 700 }}>둘러보기</span></div>
         <button onClick={onExit} style={{ background: C.accent, color: C.navy, border: "none", borderRadius: 8, padding: "6px 12px", fontWeight: 800, cursor: "pointer", fontSize: 12 }}>입장하기</button>
       </header>
-      {links && LINK_DEFS.some(([k]) => links[k]) && <div style={{ padding: "10px 14px", background: C.bg, borderBottom: `1px solid ${C.border}` }}><LinkBar links={links} /></div>}
+      {<div style={{ padding: "10px 14px", background: C.bg, borderBottom: `1px solid ${C.border}` }}><LinkBar links={links || {}} /></div>}
       <div style={{ display: "flex", background: C.card, borderBottom: `1px solid ${C.border}` }}>
         {[["book", "📅 자습실 안내"], ["chal", "✍️ 작도 챌린지"]].map(([k, l]) => <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: "13px 2px", border: "none", background: "none", cursor: "pointer", fontWeight: tab === k ? 800 : 400, fontSize: 13, color: tab === k ? C.blue : C.light, borderBottom: `2.5px solid ${tab === k ? C.blue : "transparent"}` }}>{l}</button>)}
       </div>
@@ -2063,7 +2077,7 @@ export default function App() {
   if (!entryOk && guest) return <GuestView onExit={() => setGuest(false)} />;
   if (!entryOk) {
     return (
-      <div style={{ minHeight: "100vh", background: C.navy, fontFamily: "'Noto Sans KR',sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ minHeight: "100vh", background: C.navy, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
         <div style={{ width: "100%", maxWidth: 340, textAlign: "center" }}>
           <div style={{ width: 56, height: 56, borderRadius: 14, background: C.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, margin: "0 auto 18px" }}>🏛</div>
           <div style={{ color: "#fff", fontWeight: 900, fontSize: 19, marginBottom: 4 }}>신전스퀘어</div>
@@ -2090,7 +2104,7 @@ export default function App() {
   const connOk = cfgSync.state === "ok" || cfgSync.state === "saving";
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Noto Sans KR',sans-serif", maxWidth: 520, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", maxWidth: 520, margin: "0 auto" }}>
       {notice && (
         <div style={{ position: "sticky", top: 0, zIndex: 200, background: notice.kind === "err" ? C.err : C.ok, color: "#fff", padding: "9px 14px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ flex: 1 }}>{notice.kind === "err" ? "⚠️ " : "✅ "}{notice.text}</span>
@@ -2112,7 +2126,7 @@ export default function App() {
         </div>
       </header>
 
-      {LINK_DEFS.some(([k]) => cfg.links?.[k]) && <div style={{ padding: "10px 14px", background: C.bg, borderBottom: `1px solid ${C.border}` }}><LinkBar links={cfg.links} /></div>}
+      {<div style={{ padding: "10px 14px", background: C.bg, borderBottom: `1px solid ${C.border}` }}><LinkBar links={cfg.links} /></div>}
 
       <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, position: "sticky", top: (notice ? 38 : 0) + 54, zIndex: 99 }}>
         <div style={{ display: "flex" }}>
