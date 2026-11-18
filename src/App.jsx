@@ -345,21 +345,31 @@ const Toggle = ({ on, onChange, color }) => (
 );
 
 const DEFAULT_LINKS = { home: "https://shinjeonsquare.com", cafe: "https://cafe.naver.com/shinjeon", blog: "https://blog.naver.com/ahffkanjfkrhgo", kakao: "https://pf.kakao.com/_MKxiYG/chat" };
+function useWide(px = 900) {
+  const q = () => typeof window !== "undefined" && window.innerWidth >= px;
+  const [w, setW] = useState(q);
+  useEffect(() => { const f = () => setW(q()); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, []);
+  return w;
+}
 const LINK_MASCOT = { home: ["board1", "홈페이지", "신전스퀘어 공식 사이트"], cafe: ["eraser1", "네이버 카페", "수강생 커뮤니티"], blog: ["pen1", "네이버 블로그", "합격 이야기·공지"], kakao: ["tri1", "카카오톡 상담", "1:1 문의하기"] };
 function LinkBar({ links: given, dark }) {
   const links = Object.fromEntries(LINK_DEFS.map(([k]) => [k, cleanUrl(given?.[k]) || DEFAULT_LINKS[k]]));
+  const wide = useWide(900);
   const items = LINK_DEFS.filter(([k]) => cleanUrl(links?.[k]));
   if (!items.length) return null;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, margin: dark ? "14px 0 0" : "0" }}>
+    <div style={{ display: "grid", gridTemplateColumns: wide && !dark ? "repeat(4, 1fr)" : "1fr 1fr", gap: 8, margin: dark ? "14px 0 0" : "0" }}>
       {items.map(([k]) => {
         const [img, t, sub] = LINK_MASCOT[k];
         const kk = k === "kakao";
+        const grn = k === "cafe" || k === "blog";
+        const nav = k === "home";
+        const bg = kk ? "#FEE500" : grn ? "#03C75A" : nav ? (dark ? "#2B4C8C" : C.navy) : C.card;
+        const fg = kk ? "#191919" : "#fff";
         return (
           <a key={k} href={cleanUrl(links[k])} target="_blank" rel="noopener noreferrer"
             style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, boxSizing: "border-box", textDecoration: "none", padding: "8px 10px", borderRadius: 14,
-              background: kk ? "#FEE500" : dark ? "#ffffff14" : C.card, color: kk ? "#191919" : dark ? "#fff" : C.navy,
-              border: kk ? "1px solid #FEE500" : dark ? "1px solid #ffffff2a" : `1px solid ${C.border}`, boxShadow: dark ? "none" : "0 1px 4px #1B2B5A14" }}>
+              background: bg, color: fg, border: `1px solid ${bg}`, boxShadow: dark ? "none" : "0 1px 4px #1B2B5A22" }}>
             <img src={`/mascot/${img}.webp`} alt="" width={40} height={44} loading="lazy" style={{ width: 40, height: 44, objectFit: "contain", flexShrink: 0 }} />
             <span style={{ minWidth: 0, textAlign: "left", lineHeight: 1.3 }}>
               <span style={{ display: "block", fontSize: 13, fontWeight: 800, whiteSpace: "nowrap" }}>{t}</span>
@@ -988,6 +998,7 @@ function ChalSettings({ examDate }) {
 
 // 👀 둘러보기: 입장 코드 없이 구경만 (예약 현황·예약자·큰 사진은 보이지 않고, 예약·인증도 할 수 없어요)
 function GuestView({ onExit }) {
+  const wide = useWide(900);
   const [tab, setTab] = useState("book");
   const [info, setInfo] = useState(null); const [chal, setChal] = useState(null); const [week, setWeek] = useState(null); const [view, setView] = useState("week"); const [fail, setFail] = useState("");
   useEffect(() => {
@@ -1110,7 +1121,7 @@ function GuestView({ onExit }) {
       <div style={{ display: "flex", background: C.card, borderBottom: `1px solid ${C.border}` }}>
         {[["book", "📅 자습실 안내"], ["chal", "✍️ 작도 챌린지"]].map(([k, l]) => <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: "13px 2px", border: "none", background: "none", cursor: "pointer", fontWeight: tab === k ? 800 : 400, fontSize: 13, color: tab === k ? C.blue : C.light, borderBottom: `2.5px solid ${tab === k ? C.blue : "transparent"}` }}>{l}</button>)}
       </div>
-      <div style={{ maxWidth: 480, margin: "0 auto", padding: 16 }}>
+      <div style={{ maxWidth: wide ? 1000 : 480, margin: "0 auto", padding: 16 }}>
         <div style={{ fontSize: 11, color: C.mid, background: "#EEF3FF", borderRadius: 10, padding: "8px 12px", marginBottom: 12, textAlign: "center" }}>👀 구경만 할 수 있는 화면이에요. 예약·인증은 <b>입장</b> 후 가능해요.</div>
         {tab === "book" ? Book() : Chal()}
         <div style={{ height: 40 }} />
@@ -1625,7 +1636,7 @@ function SaveBar({ sync, busy, onSave }) {
   const fail = sync.state === "fail";
   return (
     <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 150, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
-      <div style={{ width: "100%", maxWidth: 520, background: C.card, borderTop: `2px solid ${fail ? C.err : C.accent}`, boxShadow: "0 -6px 20px #1A2A4522", padding: "10px 14px calc(10px + env(safe-area-inset-bottom))", display: "flex", alignItems: "center", gap: 12, pointerEvents: "auto", boxSizing: "border-box" }}>
+      <div style={{ width: "100%", maxWidth: window.innerWidth >= 900 ? 1100 : 520, background: C.card, borderTop: `2px solid ${fail ? C.err : C.accent}`, boxShadow: "0 -6px 20px #1A2A4522", padding: "10px 14px calc(10px + env(safe-area-inset-bottom))", display: "flex", alignItems: "center", gap: 12, pointerEvents: "auto", boxSizing: "border-box" }}>
         <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700, color: saving ? C.warn : fail ? C.err : C.ok }}>
           {saving ? "⏳ 서버에 저장 중…" : fail ? `❌ 저장 실패${sync.msg ? ` (${sync.msg})` : ""}` : `✅ 저장 확인됨 ${sync.at ? clock(sync.at) : ""}`}
           <div style={{ fontWeight: 400, fontSize: 10, color: C.light, marginTop: 2 }}>바꾸는 즉시 자동 저장돼요 · 불안하면 눌러서 한 번 더 확인</div>
@@ -1812,6 +1823,7 @@ function Diagnostics() {
 //  메인 앱
 // ═════════════════════════════════════════════
 export default function App() {
+  const wide = useWide(900);
   // ── 입장 코드 ──
   const [guest, setGuest] = useState(false);
   const [entryOk, setEntryOk] = useState(false);
@@ -2077,8 +2089,9 @@ export default function App() {
   if (!entryOk && guest) return <GuestView onExit={() => setGuest(false)} />;
   if (!entryOk) {
     return (
-      <div style={{ minHeight: "100vh", background: C.navy, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <div style={{ width: "100%", maxWidth: 340, textAlign: "center" }}>
+      <div style={{ minHeight: "100vh", background: C.navy, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", display: "flex", alignItems: wide ? "flex-start" : "center", justifyContent: "center", padding: wide ? "48px 32px" : 20 }}>
+        <div style={wide ? { width: "100%", maxWidth: 1040, display: "grid", gridTemplateColumns: "340px 1fr", gap: 40, alignItems: "start" } : { width: "100%", maxWidth: 340, textAlign: "center" }}>
+          <div style={{ textAlign: "center" }}>
           <img src="/logo.webp" alt="신전스퀘어" width={72} height={72} style={{ width: 72, height: 72, borderRadius: 16, display: "block", margin: "0 auto 18px", boxShadow: "0 0 0 1px #ffffff22" }} />
           <div style={{ color: "#fff", fontWeight: 900, fontSize: 19, marginBottom: 4 }}>신전스퀘어</div>
           <div style={{ color: C.accent, fontSize: 11, letterSpacing: 1.5, marginBottom: 28 }}>STUDIO RESERVATION</div>
@@ -2094,7 +2107,8 @@ export default function App() {
           </div>
           <button onClick={() => setGuest(true)} style={{ width: "100%", marginTop: 12, background: "transparent", color: "#fff", border: "1.5px solid #ffffff55", borderRadius: 11, padding: 12, fontWeight: 700, cursor: "pointer", fontSize: 14 }}>👀 입장 전에 둘러보기</button>
           <EntryLinks />
-          <EntryRank />
+          </div>
+          <div style={{ paddingTop: wide ? 0 : 0 }}><EntryRank /></div>
         </div>
       </div>
     );
@@ -2104,7 +2118,7 @@ export default function App() {
   const connOk = cfgSync.state === "ok" || cfgSync.state === "saving";
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", maxWidth: 520, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", maxWidth: wide ? 1100 : 520, margin: "0 auto" }}>
       {notice && (
         <div style={{ position: "sticky", top: 0, zIndex: 200, background: notice.kind === "err" ? C.err : C.ok, color: "#fff", padding: "9px 14px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ flex: 1 }}>{notice.kind === "err" ? "⚠️ " : "✅ "}{notice.text}</span>
