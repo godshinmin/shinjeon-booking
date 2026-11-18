@@ -57,11 +57,20 @@ const STUDIO_META = [
 ];
 const DEFAULT_INFO = "🏢 서울시 송파구 가락동 91-5\n🚗 차량불가 · 🍱 취식자제 · 🧹 이용 후 자리 정리\n⚠️ 노쇼 3회 시 패널티\n💡 마지막 퇴실자: 소등 + 에어컨OFF + 문잠금";
 
+// 홈페이지·카페·블로그·카카오톡 상담 링크 (관리 화면에서 주소를 넣으면 입장 화면과 메인 화면에 버튼으로 나와요)
+const LINK_DEFS = [["home", "🏠", "홈페이지"], ["cafe", "☕", "카페"], ["blog", "📝", "블로그"], ["kakao", "💬", "카카오톡 상담"]];
+const cleanUrl = s => {
+  let t = String(s || "").trim().slice(0, 300);
+  if (!t) return "";
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(t)) t = "https://" + t;
+  return /^https?:\/\/[^\s<>"']+$/i.test(t) ? t : "";
+};
 const makeDefaultCfg = () => ({
   rev: 0,
   info: DEFAULT_INFO,
   showRanking: true,
   rankingSince: "",
+  links: { home: "", cafe: "", blog: "", kakao: "" },
   weekly: [],
   dday: { label: "건축사 시험", date: "" },
   notice: { text: "", at: "" },
@@ -92,7 +101,7 @@ const normalizeWeekly = (w) => {
 const sj = x => JSON.stringify(x);
 const mergeCfg = (base, mine, theirs) => {
   const out = { ...theirs, rooms: { ...theirs.rooms } };
-  for (const k of ["info", "showRanking", "rankingSince", "dday", "notice", "message"]) if (sj(mine[k]) !== sj(base[k])) out[k] = mine[k];
+  for (const k of ["info", "showRanking", "rankingSince", "links", "dday", "notice", "message"]) if (sj(mine[k]) !== sj(base[k])) out[k] = mine[k];
   for (const id of Object.keys(mine.rooms)) if (sj(mine.rooms[id]) !== sj(base.rooms?.[id])) out.rooms[id] = mine.rooms[id];
   const bw = base.weekly || [], mw = mine.weekly || [];
   const bIds = new Set(bw.map(r => r.id)), mIds = new Set(mw.map(r => r.id));
@@ -119,6 +128,7 @@ const normalizeCfg = (v) => {
     info: typeof v?.info === "string" ? v.info.slice(0, 600) : DEFAULT_INFO,
     showRanking: v?.showRanking === undefined ? true : !!v.showRanking,
     rankingSince: typeof v?.rankingSince === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.rankingSince) ? v.rankingSince : "",
+    links: Object.fromEntries(LINK_DEFS.map(([k]) => [k, cleanUrl(v?.links?.[k])])),
     weekly: normalizeWeekly(v?.weekly),
     dday: {
       label: typeof v?.dday?.label === "string" && v.dday.label.trim() ? v.dday.label.trim().slice(0, 20) : "건축사 시험",
@@ -334,18 +344,43 @@ const Toggle = ({ on, onChange, color }) => (
   </button>
 );
 
-function TextCommit({ value, onCommit, multiline, maxLength, style }) {
+function LinkBar({ links, dark }) {
+  const items = LINK_DEFS.filter(([k]) => cleanUrl(links?.[k]));
+  if (!items.length) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", margin: dark ? "14px 0 0" : "0" }}>
+      {items.map(([k, ic, label]) => (
+        <a key={k} href={cleanUrl(links[k])} target="_blank" rel="noopener noreferrer"
+          style={{ flex: "1 1 calc(50% - 8px)", minWidth: 120, boxSizing: "border-box", textAlign: "center", textDecoration: "none", padding: "10px 8px", borderRadius: 11, fontSize: 13, fontWeight: 800,
+            background: k === "kakao" ? "#FEE500" : dark ? "#ffffff14" : C.card, color: k === "kakao" ? "#191919" : dark ? "#fff" : C.navy, border: k === "kakao" ? "1px solid #FEE500" : dark ? "1px solid #ffffff2a" : `1px solid ${C.border}` }}>{ic} {label}</a>
+      ))}
+    </div>
+  );
+}
+
+// 입장 코드 화면용: 코드 입력 전에도 링크를 볼 수 있어요
+function EntryLinks() {
+  const [links, setLinks] = useState(null);
+  useEffect(() => {
+    let dead = false;
+    (async () => { const r = await rpc("sj_public_links", {}, true); if (!dead && r.ok && r.data.ok) setLinks(r.data.links); })();
+    return () => { dead = true; };
+  }, []);
+  return links ? <LinkBar links={links} dark /> : null;
+}
+
+function TextCommit({ value, onCommit, multiline, maxLength, style, placeholder, allowEmpty }) {
   const [v, setV] = useState(value);
   useEffect(() => { setV(value); }, [value]);
   const commit = () => {
     const t = multiline ? v : v.trim();
-    if (!multiline && !t) { setV(value); return; }
+    if (!multiline && !t && !allowEmpty) { setV(value); return; }
     if (t !== value) onCommit(t);
   };
   if (multiline) {
     return <textarea value={v} maxLength={maxLength} rows={5} onChange={e => setV(e.target.value)} onBlur={commit} style={style} />;
   }
-  return <input value={v} maxLength={maxLength} onChange={e => setV(e.target.value)} onBlur={commit}
+  return <input value={v} maxLength={maxLength} placeholder={placeholder} onChange={e => setV(e.target.value)} onBlur={commit}
     onKeyDown={e => e.key === "Enter" && e.currentTarget.blur()} style={style} />;
 }
 
@@ -1342,6 +1377,18 @@ function RoomSettings({ cfg, onChange, sync, onRetry }) {
           style={{ width: "100%", padding: 10, borderRadius: 10, border: `1.5px solid ${C.border}`, fontSize: 12, lineHeight: 1.7, outline: "none", boxSizing: "border-box", fontFamily: "inherit", resize: "vertical" }} />
         <div style={{ fontSize: 10, color: C.light, marginTop: 4 }}>입력창 밖을 터치하면 서버에 저장돼요</div>
       </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.mid, marginBottom: 6 }}>🔗 바로가기 링크 (입장 화면·메인 화면에 버튼으로 표시, 비워두면 숨김)</div>
+        {LINK_DEFS.map(([k, ic, label]) => (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <div style={{ width: 92, fontSize: 12, fontWeight: 700, color: C.navy }}>{ic} {label}</div>
+            <TextCommit value={cfg.links?.[k] || ""} maxLength={300} allowEmpty onCommit={v => onChange(c => ({ ...c, links: { ...(c.links || {}), [k]: cleanUrl(v) } }))} placeholder="https://"
+              style={{ flex: 1, minWidth: 0, padding: "9px 10px", borderRadius: 9, border: `1.5px solid ${C.border}`, fontSize: 12, outline: "none", boxSizing: "border-box" }} />
+          </div>
+        ))}
+        <div style={{ fontSize: 10, color: C.light, marginTop: 2 }}>주소를 붙여넣고 입력창 밖을 터치하면 저장돼요 (https:// 는 없어도 돼요)</div>
+      </div>
     </div>
   );
 }
@@ -1896,6 +1943,7 @@ export default function App() {
             {entryMsg && <div style={{ fontSize: 12, color: "#FF8A8A", marginBottom: 10 }}>⚠️ {entryMsg}</div>}
             <button onClick={tryEntry} style={{ width: "100%", background: C.accent, color: C.navy, border: "none", borderRadius: 11, padding: 13, fontWeight: 800, cursor: "pointer", fontSize: 15 }}>{entryBusy ? "확인 중…" : "입장하기"}</button>
           </div>
+          <EntryLinks />
           <EntryRank />
         </div>
       </div>
@@ -1927,6 +1975,8 @@ export default function App() {
           <button onClick={leaveAll} style={{ background: "transparent", border: "1px solid #344060", borderRadius: 7, color: "#a0b0cc", padding: "4px 9px", cursor: "pointer", fontSize: 11 }}>처음으로</button>
         </div>
       </header>
+
+      {LINK_DEFS.some(([k]) => cfg.links?.[k]) && <div style={{ padding: "10px 14px", background: C.bg, borderBottom: `1px solid ${C.border}` }}><LinkBar links={cfg.links} /></div>}
 
       <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, position: "sticky", top: (notice ? 38 : 0) + 54, zIndex: 99 }}>
         <div style={{ display: "flex" }}>
