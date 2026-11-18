@@ -1016,6 +1016,14 @@ function GuestView({ onExit }) {
     (async () => { const r = await rpc("sj_public_chal", { p_week: week }, true); if (!dead) { if (r.ok && r.data.ok) { setChal(r.data); setFail(""); } else setFail("챌린지 정보를 불러오지 못했어요"); } })();
     return () => { dead = true; };
   }, [tab, week]);
+  const [day, setDay] = useState(0); const [dayData, setDayData] = useState(null);
+  const dayStr = addDays(today(), day);
+  useEffect(() => {
+    if (tab !== "book") return undefined;
+    let dead = false; setDayData(null);
+    (async () => { const r = await rpc("sj_public_day", { p_date: dayStr }, true); if (!dead) setDayData(r.ok && r.data.ok ? r.data : { fail: true }); })();
+    return () => { dead = true; };
+  }, [tab, dayStr]);
   const links = info ? info.links : null;
   const card = { background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 16, marginBottom: 12 };
   const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
@@ -1045,6 +1053,29 @@ function GuestView({ onExit }) {
           </div>
         ))}
         <div style={{ fontSize: 11, color: C.light, marginTop: 10, lineHeight: 1.7 }}>예약은 수강생 입장 코드로 입장한 뒤, 오늘부터 3일 뒤까지 시간대별로 할 수 있어요. (둘러보기에서는 지금 남은 좌석 수만 보이고, 시간대별 예약 현황은 보이지 않아요)</div>
+      </div>
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 900, color: C.navy, marginBottom: 10 }}>📅 날짜별 남은 좌석 <span style={{ fontSize: 11, color: C.light, fontWeight: 600 }}>(오늘~3일 뒤)</span></div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {[0, 1, 2, 3].map(i => { const ds = addDays(today(), i); const dt = new Date(ds + "T12:00:00"); const on = i === day; return (
+            <button key={i} onClick={() => setDay(i)} style={{ flex: 1, padding: "8px 2px", borderRadius: 10, cursor: "pointer", border: `1.5px solid ${on ? C.navy : C.border}`, background: on ? C.navy : C.card, color: on ? "#fff" : C.navy, fontWeight: 800, fontSize: 12, lineHeight: 1.3 }}>
+              {i === 0 ? "오늘" : `${i}일 뒤`}<div style={{ fontSize: 10, fontWeight: 600, opacity: 0.75 }}>{dt.getMonth() + 1}/{dt.getDate()} ({["일", "월", "화", "수", "목", "금", "토"][dt.getDay()]})</div>
+            </button>); })}
+        </div>
+        {!dayData && <div style={{ fontSize: 12, color: C.light, textAlign: "center", padding: 16 }}>불러오는 중…</div>}
+        {dayData && dayData.fail && <div style={{ fontSize: 12, color: C.err, textAlign: "center", padding: 16 }}>불러오지 못했어요. SQL 13 적용 전일 수 있어요.</div>}
+        {dayData && !dayData.fail && Object.entries(dayData.rooms || {}).map(([id, r]) => (
+          <div key={id} style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: C.navy, marginBottom: 6 }}>{r.name || `스튜디오 ${id}`} <span style={{ fontSize: 11, color: C.light, fontWeight: 600 }}>{r.open ? `${r.seats}석` : "운영 안 함"}</span></div>
+            {r.open && <div style={{ display: "grid", gridTemplateColumns: `repeat(${wide ? 24 : 8}, 1fr)`, gap: 3 }}>
+              {r.slots.map((a, i) => { const m = 540 + i * 30; const hhmm = `${Math.floor(m / 60)}:${m % 60 ? "30" : "00"}`;
+                const bg = a === -2 ? "#EEF0F5" : a === -1 ? "#E4E7EF" : a <= 0 ? "#FDE3E3" : a <= 3 ? "#FFF0D6" : "#E3F6EA";
+                const fg = a === -2 || a === -1 ? C.light : a <= 0 ? C.err : a <= 3 ? C.warn : C.ok;
+                return <div key={i} style={{ background: bg, borderRadius: 6, textAlign: "center", padding: "3px 0" }}><div style={{ fontSize: 8, color: C.light }}>{hhmm}</div><div style={{ fontSize: 12, fontWeight: 800, color: fg }}>{a >= 0 ? a : "–"}</div></div>; })}
+            </div>}
+          </div>
+        ))}
+        <div style={{ fontSize: 10, color: C.light, lineHeight: 1.7 }}>숫자는 그 시간대에 남은 좌석 수예요. – 는 지난 시간·이용 불가예요. 예약자 정보는 보이지 않아요.</div>
       </div>
       {info && info.info && info.info.trim() && <div style={card}><div style={{ fontSize: 12, fontWeight: 800, color: C.navy, marginBottom: 6 }}>📋 이용 안내</div><div style={{ fontSize: 11, color: C.mid, lineHeight: 2 }}>{info.info.split("\n").map((l, i) => <div key={i}>{l}</div>)}</div></div>}
     </div>
@@ -2092,6 +2123,7 @@ export default function App() {
       <div style={{ minHeight: "100vh", background: C.navy, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", display: "flex", alignItems: wide ? "flex-start" : "center", justifyContent: "center", padding: wide ? "48px 32px" : 20 }}>
         <div style={wide ? { width: "100%", maxWidth: 1040, display: "grid", gridTemplateColumns: "340px 1fr", gap: 40, alignItems: "start" } : { width: "100%", maxWidth: 340, textAlign: "center" }}>
           <div style={{ textAlign: "center" }}>
+          <div style={{ marginBottom: 22 }}><EntryLinks /></div>
           <img src="/logo.webp" alt="신전스퀘어" width={72} height={72} style={{ width: 72, height: 72, borderRadius: 16, display: "block", margin: "0 auto 18px", boxShadow: "0 0 0 1px #ffffff22" }} />
           <div style={{ color: "#fff", fontWeight: 900, fontSize: 19, marginBottom: 4 }}>신전스퀘어</div>
           <div style={{ color: C.accent, fontSize: 11, letterSpacing: 1.5, marginBottom: 28 }}>STUDIO RESERVATION</div>
@@ -2106,7 +2138,6 @@ export default function App() {
             <button onClick={tryEntry} style={{ width: "100%", background: C.accent, color: C.navy, border: "none", borderRadius: 11, padding: 13, fontWeight: 800, cursor: "pointer", fontSize: 15 }}>{entryBusy ? "확인 중…" : "입장하기"}</button>
           </div>
           <button onClick={() => setGuest(true)} style={{ width: "100%", marginTop: 12, background: "transparent", color: "#fff", border: "1.5px solid #ffffff55", borderRadius: 11, padding: 12, fontWeight: 700, cursor: "pointer", fontSize: 14 }}>👀 입장 전에 둘러보기</button>
-          <EntryLinks />
           </div>
           <div style={{ paddingTop: wide ? 0 : 0 }}><EntryRank /></div>
         </div>
