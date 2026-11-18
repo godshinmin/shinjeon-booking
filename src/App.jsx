@@ -2079,7 +2079,7 @@ export default function App() {
     return (
       <div style={{ minHeight: "100vh", background: C.navy, fontFamily: "'SeoulNamsanM','Noto Sans KR',sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
         <div style={{ width: "100%", maxWidth: 340, textAlign: "center" }}>
-          <div style={{ width: 56, height: 56, borderRadius: 14, background: C.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, margin: "0 auto 18px" }}>🏛</div>
+          <img src="/logo.webp" alt="신전스퀘어" width={72} height={72} style={{ width: 72, height: 72, borderRadius: 16, display: "block", margin: "0 auto 18px", boxShadow: "0 0 0 1px #ffffff22" }} />
           <div style={{ color: "#fff", fontWeight: 900, fontSize: 19, marginBottom: 4 }}>신전스퀘어</div>
           <div style={{ color: C.accent, fontSize: 11, letterSpacing: 1.5, marginBottom: 28 }}>STUDIO RESERVATION</div>
           <div style={{ background: "#ffffff10", borderRadius: 16, padding: 24, border: "1px solid #ffffff22" }}>
@@ -2114,7 +2114,7 @@ export default function App() {
 
       <header style={{ background: C.navy, padding: "12px 16px", position: "sticky", top: notice ? 38 : 0, zIndex: 100, borderBottom: `2px solid ${C.accent}44` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 8, background: C.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>🏛</div>
+          <img src="/logo.webp" alt="" width={30} height={30} style={{ width: 30, height: 30, borderRadius: 8, display: "block" }} />
           <div style={{ flex: 1 }}>
             <div style={{ color: "#fff", fontWeight: 900, fontSize: 15, lineHeight: 1.1 }}>신전스퀘어</div>
             <div style={{ color: C.accent, fontSize: 8, letterSpacing: 1.5 }}>STUDIO RESERVATION</div>
