@@ -924,7 +924,7 @@ function ChalPostSheet({ title, onClose, onDone }) {
         <div>
           <label style={labelStyle}>내 비밀번호 (숫자 4자리) *</label>
           <input type="password" inputMode="numeric" maxLength={4} value={pw} onChange={e => setPw(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="항상 같은 번호로 입력해주세요" style={{ ...inputStyle, letterSpacing: 8 }} />
-          <div style={{ fontSize: 10, color: C.light, marginTop: 5, lineHeight: 1.6 }}>🔒 <b>이름 + 비밀번호</b>가 나예요. 처음 정한 번호를 계속 써주세요. 이름이 같은 다른 분은 번호가 다르면 이름 뒤에 B 같은 구분을 붙여요. 잘못 올린 인증을 지울 때도 필요해요.<br />🙋 비밀번호를 잊었다면 <b>카카오톡 상담</b>으로 이름과 함께 알려주세요. 관리자가 새 번호를 정해드려요. (기록은 그대로예요)</div>
+          <div style={{ fontSize: 10, color: C.light, marginTop: 5, lineHeight: 1.6 }}>🛡 부적절한 사진은 삭제해도 3일간 관리자가 올린 사람과 함께 확인할 수 있어요.<br />🔒 <b>이름 + 비밀번호</b>가 나예요. 처음 정한 번호를 계속 써주세요. 이름이 같은 다른 분은 번호가 다르면 이름 뒤에 B 같은 구분을 붙여요. 잘못 올린 인증을 지울 때도 필요해요.<br />🙋 비밀번호를 잊었다면 <b>카카오톡 상담</b>으로 이름과 함께 알려주세요. 관리자가 새 번호를 정해드려요. (기록은 그대로예요)</div>
         </div>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
@@ -975,6 +975,45 @@ function ChalPhotoSheet({ post, admin, onClose, onDeleted }) {
   );
 }
 
+function TrashBox() {
+  const [open, setOpen] = useState(false); const [items, setItems] = useState(null); const [err, setErr] = useState(""); const [big, setBig] = useState(null);
+  const load = async () => {
+    setErr(""); const r = await rpc("sj_admin_chal_trash", { p_token: AUTH.token });
+    if (r.ok) setItems(r.data.items || []); else if (r.data.code !== "auth") setErr(failMsg(r, "불러오지 못했어요"));
+  };
+  const show = async it => {
+    setBig({ ...it, photo: it.thumb });
+    const r = await rpc("sj_admin_chal_trash_photo", { p_token: AUTH.token, p_id: it.id });
+    if (r.ok) setBig(b => b && b.id === it.id ? { ...b, photo: r.data.photo } : b);
+  };
+  return (
+    <div style={{ marginTop: 14, padding: 12, background: C.bg, borderRadius: 12 }}>
+      <div onClick={() => { const n = !open; setOpen(n); if (n) load(); }} style={{ fontSize: 13, fontWeight: 800, color: C.navy, cursor: "pointer" }}>🗑 삭제된 인증 (3일 보관) {open ? "▲" : "▼"}</div>
+      <div style={{ fontSize: 11, color: C.light, marginTop: 4, lineHeight: 1.6 }}>누가 지웠든 삭제된 인증은 3일 동안 관리자만 볼 수 있어요. 올린 이름·시각·접속 주소가 함께 보여요.</div>
+      {open && (<div style={{ marginTop: 10 }}>
+        {err && <div style={{ fontSize: 12, color: C.err, marginBottom: 8 }}>{err} <button onClick={load} style={{ border: "none", background: "none", color: C.blue, fontWeight: 700, cursor: "pointer" }}>다시 시도</button></div>}
+        {!items && !err && <div style={{ fontSize: 12, color: C.mid }}>⏳ 불러오는 중…</div>}
+        {items && items.length === 0 && <div style={{ fontSize: 12, color: C.mid }}>삭제된 인증이 없어요.</div>}
+        {items && items.map(it => (
+          <div key={it.id} onClick={() => show(it)} style={{ display: "flex", gap: 10, alignItems: "center", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 8, marginBottom: 6, cursor: "pointer" }}>
+            <img src={it.thumb} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, background: C.bg }} />
+            <div style={{ fontSize: 11, color: C.mid, lineHeight: 1.6, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: C.navy }}>{it.name} · {SESS_LABEL[it.sess]} · {it.minutes}분</div>
+              <div>올림 {it.up_at} · 삭제 {it.del_at}</div>
+              <div style={{ wordBreak: "break-all" }}>접속 주소 {it.ip || "기록 없음"}</div>
+            </div>
+          </div>
+        ))}
+      </div>)}
+      {big && (
+        <div onClick={() => setBig(null)} style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 400, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <img src={big.photo} alt="" style={{ maxWidth: "100%", maxHeight: "75vh", borderRadius: 10 }} />
+          <div style={{ color: "#fff", fontSize: 13, marginTop: 10, textAlign: "center", lineHeight: 1.7 }}>{big.name} · 올림 {big.up_at} · 삭제 {big.del_at}<br />접속 주소 {big.ip || "기록 없음"} · 화면을 누르면 닫혀요</div>
+        </div>
+      )}
+    </div>
+  );
+}
 function ResetPw() {
   const [name, setName] = useState(""); const [pw, setPw] = useState(""); const [msg, setMsg] = useState(null); const [busy, setBusy] = useState(false);
   const go = async () => {
@@ -1039,6 +1078,7 @@ function ChalAdmin({ cfg, examDate, onSaved }) {
       })()}
       <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>🗜 올린 지 3주가 지난 사진은 자동으로 작은 사진(확대 불가)이 돼요. <button onClick={async () => { const r = await rpc("sj_admin_chal_purge", { p_token: AUTH.token }); if (r.ok) { setMsg({ ok: true, t: `${r.data.n}장을 작은 사진으로 줄였어요` }); loadUsage(); } }} style={{ border: `1px solid ${C.border}`, background: C.bg, borderRadius: 7, padding: "3px 8px", fontSize: 11, fontWeight: 700, color: C.mid, cursor: "pointer" }}>지금 정리하기</button></div>
       <ResetPw />
+      <TrashBox />
       <div style={{ fontSize: 11, color: C.light, marginTop: 6, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요)</div>
       {usage && usage.bytes > 350 * 1048576 && <div style={{ fontSize: 12, color: C.err, fontWeight: 800, marginTop: 6 }}>⚠️ 용량이 {Math.round(usage.bytes / 5242880)}% 찼어요. 500MB가 넘으면 예약 저장도 멈춰요. 오래된 사진을 지우거나 유료 전환이 필요해요.</div>}
     </div>
