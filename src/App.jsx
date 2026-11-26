@@ -244,6 +244,16 @@ const placeBooking = async payload => {
 // ═════════════════════════════════════════════
 const toMin    = t => { const [h, m] = String(t || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
 const fmtDur   = min => { const h = Math.floor(min / 60), m = min % 60; return h && m ? `${h}시간 ${m}분` : h ? `${h}시간` : `${m}분`; };
+// 이름 규칙: 한글 2~5자(뒤에 구분 알파벳 1자 가능, 예: 김민수B) 또는 영문 2~20자. 숫자·기호·이모지·자음/모음만 있는 이름은 안 돼요.
+const NAME_BAD = ["바보", "멍청", "똥", "씨발", "시발", "병신", "개새", "좆", "지랄", "섹스", "관리자", "운영자", "익명", "테스트", "test", "admin"];
+const nameProblem = n => {
+  const ok = /^[가-힣]{2,5}[A-Za-z]?$/.test(n) || /^[A-Za-z][A-Za-z ]{1,19}$/.test(n);
+  if (!ok) return "이름은 본명(한글 2~5자)으로 입력해주세요. 숫자·기호·이모지·자음만 있는 이름은 쓸 수 없어요. 같은 이름이 있으면 뒤에 알파벳을 붙여주세요 (예: 김민수B)";
+  const low = n.toLowerCase();
+  if (NAME_BAD.some(w => low.includes(w))) return "장난 이름은 쓸 수 없어요. 본명으로 올려주세요.";
+  if (/^(.)\1+$/.test(n.replace(/[A-Za-z]$/, ""))) return "장난 이름은 쓸 수 없어요. 본명으로 올려주세요.";
+  return "";
+};
 const normName = s => String(s || "").replace(/\s+/g, " ").trim();
 const nowHM    = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const weekStart  = () => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return toStr(d); }; // 월요일 시작
@@ -865,6 +875,7 @@ function ChalPostSheet({ title, onClose, onDone }) {
   const submit = async () => {
     const nm = normName(name); const mins = parseInt(minutes, 10);
     if (!nm) return setErr("이름을 입력해주세요");
+    { const np = nameProblem(nm); if (np) return setErr(np); }
     if (!sess) return setErr("교시를 선택해주세요");
     if (!mins || mins < 5 || mins > 600) return setErr("작도시간(분)을 5~600 사이로 입력해주세요");
     if (!file) return setErr("작도한 사진을 선택해주세요");
