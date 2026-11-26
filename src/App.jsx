@@ -836,6 +836,17 @@ function Combo({ streaks, name, dark }) {
   const [ic, fg, bg] = COMBO(n);
   return <span style={{ marginLeft: 6, display: "inline-block", fontSize: 10, fontWeight: 900, padding: "2px 7px", borderRadius: 999, background: dark ? "#ffffff1f" : bg, color: dark ? "#FFD27A" : fg, verticalAlign: "middle", whiteSpace: "nowrap" }}>{ic} {n}일 연속{n >= 3 ? " COMBO!" : ""}</span>;
 }
+const COMBO_TIERS = [["✨", "2일 연속", "좋은 시작!"], ["🔥", "3일 연속", "COMBO 시작! 불이 붙었어요"], ["🏅", "7일 연속", "일주일 개근 메달"], ["🥇", "14일 연속", "2주 연속, 금메달"], ["🏆", "21일 연속", "3주 연속, 트로피"], ["👑", "30일 연속", "명예의 전당 입성!"]];
+function ComboGuide({ dark }) {
+  const fg = dark ? "#fff" : C.navy, sub = dark ? "#a0b0cc" : C.mid;
+  return (
+    <details style={{ marginTop: 10, background: dark ? "#ffffff10" : "#EEF3FF", borderRadius: 10, padding: "8px 12px", textAlign: "left" }}>
+      <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 800, color: dark ? "#FFD27A" : C.navy, listStyle: "none" }}>🔥 COMBO가 뭐예요? <span style={{ fontWeight: 600, color: sub }}>(눌러서 보기)</span></summary>
+      <div style={{ fontSize: 11, color: sub, lineHeight: 1.8, marginTop: 6 }}>하루에 한 장이라도 완성된 도면을 올리면 그날은 인증 OK! 인증한 날이 이어질수록 이름 옆에 배지가 붙어요. 하루라도 건너뛰면 처음부터 다시 세요. (어제까지 이어졌다면 오늘 안에 올리면 유지돼요)</div>
+      {COMBO_TIERS.map(([ic, d, t]) => <div key={d} style={{ display: "flex", gap: 8, fontSize: 12, color: fg, padding: "3px 0" }}><span style={{ width: 22, textAlign: "center" }}>{ic}</span><b style={{ width: 62 }}>{d}</b><span style={{ color: sub }}>{t}</span></div>)}
+    </details>
+  );
+}
 const byPosts = rows => [...(rows || [])].sort((a, b) => (b.posts || 0) - (a.posts || 0) || String(a.name).localeCompare(String(b.name), "ko"));
 const SESS_LABEL = { 1: "1교시", 2: "2교시", 3: "3교시" };
 
@@ -1105,6 +1116,7 @@ function GuestView({ onExit }) {
           </div>
           <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{fmt(chal.cfg.start)} ~ {fmt(chal.cfg.end)} · 주 {goal}일 이상 인증 · {chal.started ? `${chal.cur_week}/${chal.cfg.weeks}주차` : "곧 시작"}</div>
         </div>
+        <div style={{ marginBottom: 12, marginTop: -4 }}><ComboGuide /></div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
           {[["week", "주간 순위"], ["total", "누적 순위"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13, border: `1.5px solid ${view === k ? C.blue : C.border}`, background: view === k ? C.blue : C.card, color: view === k ? "#fff" : C.mid }}>{l}</button>)}
         </div>
@@ -1208,6 +1220,7 @@ function EntryRank() {
           <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `하루 한 장만 그려도 인증 1일 · 인증한 날이 많은 순` : `${fmt(chal.start)}(${DAY[new Date(chal.start + "T12:00:00").getDay()]}) 시작`}</div>
           {chalRows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>{chal.started ? "아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪" : "시작하면 이곳에 순위가 나와요"}</div>}
           {chalRows.map(p => line(p.name, p.rank, p.name, `${p.days}일`, chal.streaks))}
+          <ComboGuide dark />
         </div>
         {(() => {
           const hof = Object.entries(chal.streaks || {}).filter(([, v]) => (v.best || 0) >= 30).sort((x, y) => y[1].best - x[1].best || x[0].localeCompare(y[0], "ko"));
@@ -1354,6 +1367,7 @@ function ChallengeTab({ admin }) {
         </div>
         <button onClick={() => canPost && setPosting(true)} disabled={!canPost} style={{ width: "100%", background: canPost ? C.blue : C.border, color: canPost ? "#fff" : C.mid, border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: canPost ? "pointer" : "default", marginBottom: canPost ? 14 : 4 }}>{canPost ? "📸 오늘 작도 인증 올리기" : data.ended ? "챌린지가 끝났어요" : `📸 ${fmt(cfg.start)}부터 인증을 올릴 수 있어요`}</button>
         {canPost && <div style={{ fontSize: 11, color: C.mid, textAlign: "center", marginBottom: 14 }}>✅ 완성된 도면만 올려주세요 · 하루 한 장이면 OK · 연속하면 🔥 COMBO!</div>}
+        <div style={{ marginBottom: 14, marginTop: -6 }}><ComboGuide /></div>
         {!canPost && !data.ended && <div style={{ fontSize: 11, color: C.light, textAlign: "center", marginBottom: 14 }}>시작일부터 이 자리에 인증 올리기 버튼이 활성화돼요</div>}
 
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
