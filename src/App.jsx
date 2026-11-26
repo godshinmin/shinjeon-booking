@@ -1902,6 +1902,7 @@ export default function App() {
   // ── 입장 코드 ──
   const [guest, setGuest] = useState(false);
   const [entryOk, setEntryOk] = useState(false);
+  const [role, setRole] = useState("full"); // full: 수강생(자습실+작도) / chal: 작도 챌린지 전용
   const [entryChecked, setEntryChecked] = useState(false);
   const [entryInput, setEntryInput] = useState("");
   const [entryErr, setEntryErr] = useState(false);
@@ -1909,7 +1910,16 @@ export default function App() {
   useEffect(() => {
     try {
       const c = localStorage.getItem("sj_booking_entry_code");
-      if (c && /^\d{1,10}$/.test(c)) { AUTH.entry = c; setEntryOk(true); }
+      if (c && /^\d{1,10}$/.test(c)) {
+        AUTH.entry = c;
+        const saved = localStorage.getItem("sj_booking_role");
+        if (saved === "chal") { setRole("chal"); setTab("chal"); }
+        setEntryOk(true);
+        rpc("sj_entry_check", { p_entry: c }, true).then(r => {
+          if (r.ok && r.data && r.data.role === "chal") { setRole("chal"); setTab("chal"); try { localStorage.setItem("sj_booking_role", "chal"); } catch {} }
+          else if (r.ok && r.data && r.data.role === "full") { setRole("full"); try { localStorage.setItem("sj_booking_role", "full"); } catch {} }
+        });
+      }
       localStorage.removeItem("sj_booking_entry_ok"); // 예전 방식(코드 없이 통과)은 더 이상 쓰지 않아요
     } catch {}
     setEntryChecked(true);
@@ -1920,7 +1930,11 @@ export default function App() {
     setEntryBusy(true); setEntryErr(false); setEntryMsg("");
     const r = await rpc("sj_entry_check", { p_entry: code }, true);
     setEntryBusy(false);
-    if (r.ok) { AUTH.entry = code; setEntryOk(true); try { localStorage.setItem("sj_booking_entry_code", code); } catch {} }
+    if (r.ok) {
+      const rl = r.data && r.data.role === "chal" ? "chal" : "full";
+      AUTH.entry = code; setRole(rl); if (rl === "chal") setTab("chal"); setEntryOk(true);
+      try { localStorage.setItem("sj_booking_entry_code", code); localStorage.setItem("sj_booking_role", rl); } catch {}
+    }
     else if (r.status === 0 || r.missing || r.data.code === "locked") setEntryMsg(r.data.code === "locked" ? (r.data.msg || "잠시 후 다시 시도해주세요.") : failMsg(r, "잠시 후 다시 시도해주세요."));
     else { setEntryErr(true); setEntryInput(""); }
   };
@@ -1935,8 +1949,8 @@ export default function App() {
     hooks.adminFail = () => { if (!AUTH.token) return; AUTH.token = ""; setAdmin(false); setNotice({ kind: "err", text: "관리자 로그인이 만료됐어요. 다시 로그인해주세요" }); };
     hooks.entryFail = () => {
       AUTH.entry = ""; AUTH.token = "";
-      try { localStorage.removeItem("sj_booking_entry_code"); } catch {}
-      setAdmin(false); setEntryOk(false); setEntryInput(""); setEntryMsg("입장 코드를 다시 입력해주세요");
+      try { localStorage.removeItem("sj_booking_entry_code"); localStorage.removeItem("sj_booking_role"); } catch {}
+      setAdmin(false); setRole("full"); setEntryOk(false); setEntryInput(""); setEntryMsg("입장 코드를 다시 입력해주세요");
     };
     return () => { hooks.adminFail = null; hooks.entryFail = null; };
   }, []);
@@ -2037,7 +2051,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!entryOk) return;
+    if (!entryOk || role === "chal") return;
     const tick = () => { pullCfg(); if (dirtyRef.current && !savingRef.current) flushCfg(); };
     tick();
     const iv = setInterval(() => { if (document.visibilityState !== "hidden") tick(); }, 4000); // 화면이 백그라운드면 요청 중단
@@ -2045,7 +2059,7 @@ export default function App() {
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("focus", tick);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", tick); };
-  }, [entryOk, pullCfg, flushCfg]);
+  }, [entryOk, role, pullCfg, flushCfg]);
 
   const studios = useMemo(() => STUDIO_META.map(m => {
     const r = cfg.rooms[m.id];
@@ -2072,13 +2086,13 @@ export default function App() {
     if (!silent) setDayLoading(false);
   }, []);
   useEffect(() => {
-    if (!entryOk) return;
+    if (!entryOk || role === "chal") return;
     loadDay(date, false);
     const iv = setInterval(() => { if (document.visibilityState !== "hidden") loadDay(date, true); }, 6000);
     const onVis = () => { if (document.visibilityState === "visible") loadDay(date, true); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
-  }, [date, entryOk, loadDay]);
+  }, [date, entryOk, role, loadDay]);
   const dateRes = day.date === date ? day.res : [];
   const dateLocks = useMemo(() => [...(day.date === date ? day.locks : []), ...ruleLocks(cfg.weekly, date)], [day, date, cfg.weekly]);
 
@@ -2143,8 +2157,8 @@ export default function App() {
   const leaveAll = () => { // 처음 화면(입장 코드)으로: 관리자 로그아웃 + 입장 코드 지움
     const t = AUTH.token; AUTH.token = ""; AUTH.entry = "";
     if (t) rpc("sj_admin_logout", { p_token: t }, true);
-    try { localStorage.removeItem("sj_booking_entry_code"); } catch {}
-    setAdmin(false); setEntryOk(false); setEntryInput(""); setEntryMsg(""); setDate(today());
+    try { localStorage.removeItem("sj_booking_entry_code"); localStorage.removeItem("sj_booking_role"); } catch {}
+    setAdmin(false); setRole("full"); setTab("book"); setEntryOk(false); setEntryInput(""); setEntryMsg(""); setDate(today());
   };
   const changeAdminPw = async (cur, next) => {
     const r = await rpc("sj_admin_change_pw", { p_token: AUTH.token, p_cur: cur, p_new: next });
@@ -2173,7 +2187,7 @@ export default function App() {
           <div style={{ color: C.accent, fontSize: 11, letterSpacing: 1.5, marginBottom: 28 }}>STUDIO RESERVATION</div>
           <div style={{ background: "#ffffff10", borderRadius: 16, padding: 24, border: "1px solid #ffffff22" }}>
             <div style={{ color: "#fff", fontSize: 14, fontWeight: 700, marginBottom: 6 }}>입장 코드를 입력해주세요</div>
-            <div style={{ color: "#a0b0cc", fontSize: 11, marginBottom: 16 }}>신전스퀘어 수강생만 이용할 수 있어요</div>
+            <div style={{ color: "#a0b0cc", fontSize: 11, marginBottom: 16 }}>수강생 코드 · 작도 챌린지 참가 코드로 입장해요</div>
             <input value={entryInput} onChange={e => { setEntryInput(e.target.value.replace(/\D/g, "").slice(0, 10)); setEntryErr(false); }}
               onKeyDown={e => e.key === "Enter" && tryEntry()} placeholder="입장 코드" autoFocus inputMode="numeric"
               style={{ width: "100%", padding: "13px 14px", borderRadius: 11, border: `1.5px solid ${entryErr ? C.err : "#ffffff33"}`, fontSize: 16, outline: "none", boxSizing: "border-box", textAlign: "center", letterSpacing: 6, background: "#ffffff12", color: "#fff", marginBottom: 10 }} />
@@ -2208,7 +2222,7 @@ export default function App() {
             <div style={{ color: "#fff", fontWeight: 900, fontSize: 15, lineHeight: 1.1 }}>신전스퀘어</div>
             <div style={{ color: C.accent, fontSize: 8, letterSpacing: 1.5 }}>STUDIO RESERVATION</div>
           </div>
-          <Tag c={connOk ? C.ok : C.err}>{connOk ? "서버 연결됨" : cfgSync.state === "loading" ? "연결 중…" : "연결 끊김"}</Tag>
+          {role === "chal" ? <Tag c={C.accent}>작도 챌린지</Tag> : <Tag c={connOk ? C.ok : C.err}>{connOk ? "서버 연결됨" : cfgSync.state === "loading" ? "연결 중…" : "연결 끊김"}</Tag>}
           {admin && <Tag c={C.accent}>관리자</Tag>}
           {admin && <button onClick={logoutAdmin} style={{ background: "transparent", border: "1px solid #344060", borderRadius: 7, color: "#a0b0cc", padding: "4px 9px", cursor: "pointer", fontSize: 11 }}>로그아웃</button>}
           <button onClick={leaveAll} style={{ background: "transparent", border: "1px solid #344060", borderRadius: 7, color: "#a0b0cc", padding: "4px 9px", cursor: "pointer", fontSize: 11 }}>처음으로</button>
@@ -2219,7 +2233,7 @@ export default function App() {
 
       <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, position: "sticky", top: (notice ? 38 : 0) + 54, zIndex: 99 }}>
         <div style={{ display: "flex" }}>
-          {[["book", "📅 예약"], ["mine", "🗒 내 예약"], ["chal", "✍️ 작도"], ...(admin || cfg.showRanking ? [["rank", "🏆 랭킹"]] : []), ["admin", admin ? "⚙️ 관리" : "🔒 관리"]].map(([k, l]) => (
+          {(role === "chal" ? [["chal", "✍️ 작도 챌린지"]] : [["book", "📅 예약"], ["mine", "🗒 내 예약"], ["chal", "✍️ 작도"], ...(admin || cfg.showRanking ? [["rank", "🏆 랭킹"]] : []), ["admin", admin ? "⚙️ 관리" : "🔒 관리"]]).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: "13px 2px", border: "none", background: "none", cursor: "pointer", fontWeight: tab === k ? 800 : 400, fontSize: 12, color: tab === k ? C.blue : C.light, borderBottom: `2.5px solid ${tab === k ? C.blue : "transparent"}` }}>{l}</button>
           ))}
         </div>
