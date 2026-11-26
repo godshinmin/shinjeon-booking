@@ -995,7 +995,13 @@ function ChalAdmin({ cfg, examDate, onSaved }) {
       <div style={{ marginBottom: 10 }}><label style={labelStyle}>주 목표 (일)</label><input type="number" min={1} max={7} value={goal} onChange={e => setGoal(e.target.value)} style={{ ...inputStyle, width: 100 }} /></div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><Toggle on={active} onChange={setActive} color={C.ok} /><span style={{ fontSize: 13, color: C.mid }}>{active ? "진행 중 (학생이 인증을 올릴 수 있어요)" : "중지 (탭에 '준비 중'으로 표시)"}</span></div>
       {msg && <div style={{ fontSize: 12, color: msg.ok ? C.ok : C.err, marginBottom: 8, fontWeight: 700 }}>{msg.t}</div>}
-      <button onClick={save} disabled={busy} style={{ background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>{busy ? "저장 중…" : "챌린지 설정 저장"}</button>
+      {(() => {
+        const dirty = name !== (cfg.name || "작도 챌린지") || start !== (cfg.start || "") || end !== (cfg.end || examDate || "") || String(goal) !== String(cfg.goal || 5) || !!active !== !!cfg.active;
+        return (<>
+          {dirty && <div style={{ fontSize: 12, color: C.warn, fontWeight: 800, background: "#FFF8E6", borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>⚠️ 아직 저장 전이에요. 아래 <b>챌린지 설정 저장</b> 버튼을 눌러야 적용돼요.</div>}
+          <button onClick={save} disabled={busy} style={{ background: dirty ? C.blue : C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "12px 20px", fontWeight: 800, cursor: "pointer", fontSize: 14, boxShadow: dirty ? "0 0 0 3px #3A5BB544" : "none" }}>{busy ? "저장 중…" : dirty ? "💾 챌린지 설정 저장 (눌러야 적용)" : "챌린지 설정 저장"}</button>
+        </>);
+      })()}
       <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>🗜 올린 지 3주가 지난 사진은 자동으로 작은 사진(확대 불가)이 돼요. <button onClick={async () => { const r = await rpc("sj_admin_chal_purge", { p_token: AUTH.token }); if (r.ok) { setMsg({ ok: true, t: `${r.data.n}장을 작은 사진으로 줄였어요` }); loadUsage(); } }} style={{ border: `1px solid ${C.border}`, background: C.bg, borderRadius: 7, padding: "3px 8px", fontSize: 11, fontWeight: 700, color: C.mid, cursor: "pointer" }}>지금 정리하기</button></div>
       <div style={{ fontSize: 11, color: C.light, marginTop: 6, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요)</div>
       {usage && usage.bytes > 350 * 1048576 && <div style={{ fontSize: 12, color: C.err, fontWeight: 800, marginTop: 6 }}>⚠️ 용량이 {Math.round(usage.bytes / 5242880)}% 찼어요. 500MB가 넘으면 예약 저장도 멈춰요. 오래된 사진을 지우거나 유료 전환이 필요해요.</div>}
