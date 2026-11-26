@@ -828,6 +828,14 @@ const rankRows = (rows, keyOf) => {
   let r = 1;
   return rows.map((p, i) => { if (i > 0 && keyOf(p) !== keyOf(rows[i - 1])) r = i + 1; return { ...p, rank: r }; });
 };
+const byDays = rows => [...(rows || [])].sort((a, b) => (b.days || 0) - (a.days || 0) || String(a.name).localeCompare(String(b.name), "ko"));
+const COMBO = n => n >= 30 ? ["👑", "#B8860B", "#FFF3C4"] : n >= 21 ? ["🏆", "#B8860B", "#FFF3C4"] : n >= 14 ? ["🥇", "#9A6A00", "#FFF0CC"] : n >= 7 ? ["🏅", "#C2410C", "#FFE7D6"] : n >= 3 ? ["🔥", "#C2410C", "#FFE7D6"] : ["✨", "#4A5A85", "#EEF3FF"];
+function Combo({ streaks, name, dark }) {
+  const n = streaks && streaks[name] ? streaks[name].cur || 0 : 0;
+  if (n < 2) return null;
+  const [ic, fg, bg] = COMBO(n);
+  return <span style={{ marginLeft: 6, display: "inline-block", fontSize: 10, fontWeight: 900, padding: "2px 7px", borderRadius: 999, background: dark ? "#ffffff1f" : bg, color: dark ? "#FFD27A" : fg, verticalAlign: "middle", whiteSpace: "nowrap" }}>{ic} {n}일 연속{n >= 3 ? " COMBO!" : ""}</span>;
+}
 const byPosts = rows => [...(rows || [])].sort((a, b) => (b.posts || 0) - (a.posts || 0) || String(a.name).localeCompare(String(b.name), "ko"));
 const SESS_LABEL = { 1: "1교시", 2: "2교시", 3: "3교시" };
 
@@ -867,7 +875,7 @@ function ChalPostSheet({ title, onClose, onDone }) {
     <Sheet onClose={busy ? () => {} : onClose}>
       <div style={{ fontSize: 17, fontWeight: 900, color: C.navy, marginBottom: 4 }}>📸 작도 인증 올리기</div>
       <div style={{ fontSize: 12, color: C.mid, marginBottom: 16 }}>{title} · 하루에 몰아서 올리는 건 1일로 계산돼요</div>
-      <div style={{ fontSize: 12, color: C.navy, background: "#EEF3FF", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.5, fontWeight: 700 }}>✅ <b>완성된 도면만</b> 올려주세요. 순위는 작도 시간이 아니라 <b>그린 장수</b>로 정해져요.</div>
+      <div style={{ fontSize: 12, color: C.navy, background: "#EEF3FF", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.5, fontWeight: 700 }}>✅ <b>완성된 도면만</b> 올려주세요. 하루에 한 장만 올려도 <b>그날은 인증 OK</b>예요. 연속으로 하면 🔥 <b>COMBO!</b></div>
       <div style={{ fontSize: 11, color: C.err, background: "#FFF8E6", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.5 }}>📦 서버 용량을 아끼기 위해 <b>올린 지 3주가 지난 사진은 작은 사진으로 바뀌고 확대할 수 없어요.</b> (인증 횟수·순위는 그대로예요)</div>
       {err && <ErrBox>{err}</ErrBox>}
       <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
@@ -1086,8 +1094,8 @@ function GuestView({ onExit }) {
     if (!chal) return <div style={{ textAlign: "center", padding: 40, color: C.mid }}>{fail || "⏳ 불러오는 중…"}</div>;
     if (!chal.configured) return <div style={{ ...card, textAlign: "center", color: C.mid }}>✍️ 작도 챌린지가 곧 시작돼요!</div>;
     const goal = chal.cfg.goal;
-    const wk = rankRows(byPosts(chal.ranking), p => `${p.posts}`);
-    const tt = rankRows(byPosts(chal.total), p => `${p.posts}`);
+    const wk = rankRows(byDays(chal.ranking), p => `${p.days}`);
+    const tt = rankRows(byDays(chal.total), p => `${p.days}`);
     return (
       <div>
         <div style={{ ...card, background: C.navy, color: "#fff" }}>
@@ -1112,8 +1120,8 @@ function GuestView({ onExit }) {
           <div key={p.name} style={{ ...card, padding: 12, marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, textAlign: "center", fontSize: p.rank <= 3 ? 22 : 14, fontWeight: 900, color: C.navy }}>{medal(p.rank)}</div>
-              <div style={{ flex: 1 }}><div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: C.mid }}>{view === "week" ? `${p.posts}장 · ${p.days}일` : `${p.posts}장 · 총 ${p.days}일`}</div></div>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}<Combo streaks={chal.streaks} name={p.name} /></div>
+                <div style={{ fontSize: 11, color: C.mid }}>{view === "week" ? `이번 주 ${p.days}일 인증` : `총 ${p.days}일 인증`}</div></div>
             </div>
             {view === "week" && (
               <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
@@ -1178,11 +1186,11 @@ function EntryRank() {
   const box = { marginTop: 14, background: "#ffffff10", borderRadius: 16, padding: "16px 16px 12px", border: "1px solid #ffffff22", textAlign: "left" };
   const study = rankRows(d.study || [], p => `${p.minutes}`);
   const chal = d.chal && d.chal.show ? d.chal : null;
-  const chalRows = chal ? rankRows(byPosts(chal.top), p => `${p.posts}`).filter(p => p.rank <= 5) : [];
-  const line = (k, r, name, val) => (
+  const chalRows = chal ? rankRows(byDays((chal.top || []).map(p => ({ ...p, days: p.days ?? p.posts }))), p => `${p.days}`).filter(p => p.rank <= 5) : [];
+  const line = (k, r, name, val, st) => (
     <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: "1px solid #ffffff14" }}>
       <div style={{ width: 34, fontSize: r <= 3 ? 20 : 13, fontWeight: 900, color: "#fff", textAlign: "center" }}>{medal(r)}</div>
-      <div style={{ flex: 1, color: "#fff", fontWeight: 700, fontSize: 14 }}>{name}</div>
+      <div style={{ flex: 1, color: "#fff", fontWeight: 700, fontSize: 14 }}>{name}{st && <Combo streaks={st} name={name} dark />}</div>
       <div style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{val}</div>
     </div>
   );
@@ -1197,9 +1205,9 @@ function EntryRank() {
       {chal && (
         <div style={box}>
           <div style={{ color: "#fff", fontSize: 14, fontWeight: 800, display: "flex", justifyContent: "space-between" }}><span>✍️ {chal.name} 전체 TOP 5</span>{chal.end && daysUntil(chal.end) >= 0 && <span style={{ color: C.accent }}>{daysUntil(chal.end) === 0 ? "D-DAY" : `D-${daysUntil(chal.end)}`}</span>}</div>
-          <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `그린 장수가 많은 순 · 총 ${chal.total_posts}장` : `${fmt(chal.start)}(${DAY[new Date(chal.start + "T12:00:00").getDay()]}) 시작`}</div>
+          <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `하루 한 장만 그려도 인증 1일 · 인증한 날이 많은 순` : `${fmt(chal.start)}(${DAY[new Date(chal.start + "T12:00:00").getDay()]}) 시작`}</div>
           {chalRows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>{chal.started ? "아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪" : "시작하면 이곳에 순위가 나와요"}</div>}
-          {chalRows.map(p => line(p.name, p.rank, p.name, `${p.posts}장`))}
+          {chalRows.map(p => line(p.name, p.rank, p.name, `${p.days}일`, chal.streaks))}
         </div>
       )}
     </div>
@@ -1315,8 +1323,8 @@ function ChallengeTab({ admin }) {
     if (!data) return null;
     if (!data.configured) return <div style={{ textAlign: "center", padding: "36px 10px", color: C.mid, fontSize: 14, lineHeight: 1.8 }}>✍️ 작도 챌린지가 곧 시작돼요!<br />시작하면 이곳에서 인증 사진을 올리고<br />주간 순위를 확인할 수 있어요.</div>;
     const past = data.today > data.week_end;
-    const wk = rankRows(byPosts(data.ranking), p => `${p.posts}`);
-    const tt = rankRows(byPosts(data.total), p => `${p.posts}`);
+    const wk = rankRows(byDays(data.ranking), p => `${p.days}`);
+    const tt = rankRows(byDays(data.total), p => `${p.days}`);
     const goal = cfg.goal || 5;
     const mine = wk.find(p => p.name === me);
     const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
@@ -1329,10 +1337,10 @@ function ChallengeTab({ admin }) {
             {cfg.end && daysUntil(cfg.end) >= 0 && <div style={{ background: C.accent, color: C.navy, borderRadius: 9, padding: "3px 10px", fontSize: 13, fontWeight: 900, whiteSpace: "nowrap" }}>{daysUntil(cfg.end) === 0 ? "D-DAY" : `D-${daysUntil(cfg.end)}`}</div>}
           </div>
           <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{cfg.end ? `${fmt(cfg.start)} ~ ${fmt(cfg.end)} · ` : ""}{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 ${goal}일 이상 인증 (7일 단위)` : `${fmt(cfg.start)}(${DAY[new Date(cfg.start + "T12:00:00").getDay()]})에 시작해요`}</div>
-          {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.posts}장 · {mine.days}일 인증 · {mine.rank}등 {mine.days >= goal ? "✅" : past ? "" : `(${goal}일까지 ${goal - mine.days}일 남음)`}</div>}
+          {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.days}일 인증 · {mine.rank}등 {mine.days >= goal ? "✅" : past ? "" : `(${goal}일까지 ${goal - mine.days}일 남음)`}</div>}
         </div>
         <button onClick={() => canPost && setPosting(true)} disabled={!canPost} style={{ width: "100%", background: canPost ? C.blue : C.border, color: canPost ? "#fff" : C.mid, border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: canPost ? "pointer" : "default", marginBottom: canPost ? 14 : 4 }}>{canPost ? "📸 오늘 작도 인증 올리기" : data.ended ? "챌린지가 끝났어요" : `📸 ${fmt(cfg.start)}부터 인증을 올릴 수 있어요`}</button>
-        {canPost && <div style={{ fontSize: 11, color: C.mid, textAlign: "center", marginBottom: 14 }}>✅ 완성된 도면만 올려주세요 · 순위는 그린 장수 기준이에요</div>}
+        {canPost && <div style={{ fontSize: 11, color: C.mid, textAlign: "center", marginBottom: 14 }}>✅ 완성된 도면만 올려주세요 · 하루 한 장이면 OK · 연속하면 🔥 COMBO!</div>}
         {!canPost && !data.ended && <div style={{ fontSize: 11, color: C.light, textAlign: "center", marginBottom: 14 }}>시작일부터 이 자리에 인증 올리기 버튼이 활성화돼요</div>}
 
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
@@ -1356,8 +1364,8 @@ function ChallengeTab({ admin }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}</div>
-                    <div style={{ fontSize: 11, color: C.mid }}>{p.posts}장 · {p.days}일 인증</div>
+                    <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}<Combo streaks={data.streaks} name={p.name} /></div>
+                    <div style={{ fontSize: 11, color: C.mid }}>이번 주 {p.days}일 인증</div>
                   </div>
                   <Tag c={p.days >= goal ? C.ok : past ? C.err : C.warn}>{p.days >= goal ? `주${goal}일 달성` : past ? "미달" : `${goal - p.days}일 더`}</Tag>
                 </div>
@@ -1381,13 +1389,13 @@ function ChallengeTab({ admin }) {
         {view === "total" && tt.length === 0 && <div style={{ textAlign: "center", padding: 30, color: C.mid, fontSize: 13 }}>아직 누적 기록이 없어요.</div>}
         {view === "total" && tt.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: 11, color: C.light }}>그린 장수가 많은 순이에요 (장수가 같으면 같은 등수)</div>
+            <div style={{ fontSize: 11, color: C.light }}>인증한 날이 많은 순이에요 (같은 날수는 같은 등수) · 연속으로 하면 🔥 COMBO!</div>
             {tt.map(p => (
               <div key={p.name} style={{ background: C.card, border: `1px solid ${p.rank <= 3 ? C.accent : C.border}`, borderRadius: 13, padding: "11px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}</div>
-                  <div style={{ fontSize: 11, color: C.mid }}>{p.posts}장 · 총 {p.days}일</div>
+                  <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}<Combo streaks={data.streaks} name={p.name} /></div>
+                  <div style={{ fontSize: 11, color: C.mid }}>총 {p.days}일 인증{data.streaks && data.streaks[p.name] && data.streaks[p.name].best >= 3 ? ` · 최고 ${data.streaks[p.name].best}일 연속` : ""}</div>
                 </div>
                 <Tag c={C.ok}>{p.weeks_ok}주 달성</Tag>
               </div>
