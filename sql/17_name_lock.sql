@@ -12,5 +12,20 @@ begin
   blk := E'  declare v_owner text;\n  begin\n    select pw_hash into v_owner from sj_private.chal_posts where name = v_name order by created_at limit 1;\n    if v_owner is not null and extensions.crypt(v_pw, v_owner) <> v_owner then\n      if sj_private.fail_count(''chalname'', v_name, 10) >= 8 then return sj_private.err(''locked'', ''비밀번호를 여러 번 틀렸어요. 10분 뒤에 다시 시도해주세요.''); end if;\n      perform sj_private.fail_add(''chalname'', v_name);\n      return sj_private.err(''name_taken'', ''이미 같은 이름으로 인증한 분이 있어요. 비밀번호가 다르면 동명이인으로 보고, 이름 뒤에 구분(예: 김민수B)을 붙여서 올려주세요.'');\n    end if;\n  end;\n';
   execute replace(d, marker, marker || blk);
 end $$;
+-- 관리자: 비밀번호를 잊은 참가자의 번호를 새로 정해줘요 (그 이름의 모든 인증 비밀번호를 새 번호로 바꿔요)
+create or replace function public.sj_admin_chal_reset_pw(p_token text, p_name text, p_new text) returns jsonb
+language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
+declare v_name text := sj_private.norm_name(p_name); n int;
+begin
+  if not sj_private.admin_ok(p_token) then return sj_private.err('auth', '관리자 로그인이 필요해요'); end if;
+  if coalesce(p_new, '') !~ '^[0-9]{4}$' then return sj_private.err('pw', '새 비밀번호는 숫자 4자리로 입력해주세요.'); end if;
+  update sj_private.chal_posts set pw_hash = extensions.crypt(p_new, extensions.gen_salt('bf', 8)) where name = v_name;
+  get diagnostics n = row_count;
+  if n = 0 then return sj_private.err('not_found', '그 이름으로 올린 인증이 없어요.'); end if;
+  delete from sj_private.fail where kind = 'chalname' and k = v_name;
+  return jsonb_build_object('ok', true, 'count', n);
+end $$;
+revoke all on function public.sj_admin_chal_reset_pw(text, text, text) from public;
+grant execute on function public.sj_admin_chal_reset_pw(text, text, text) to anon, authenticated;
 notify pgrst, 'reload schema';
 select 'OK 이름+비밀번호 본인 확인 준비 완료' as result;

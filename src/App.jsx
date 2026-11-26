@@ -964,6 +964,29 @@ function ChalPhotoSheet({ post, admin, onClose, onDeleted }) {
   );
 }
 
+function ResetPw() {
+  const [name, setName] = useState(""); const [pw, setPw] = useState(""); const [msg, setMsg] = useState(null); const [busy, setBusy] = useState(false);
+  const go = async () => {
+    const n = normName(name);
+    if (!n || !/^\d{4}$/.test(pw)) { setMsg({ ok: false, t: "이름과 새 비밀번호(숫자 4자리)를 입력해주세요" }); return; }
+    setBusy(true); setMsg(null);
+    const r = await rpc("sj_admin_chal_reset_pw", { p_token: AUTH.token, p_name: n, p_new: pw });
+    setBusy(false);
+    if (r.ok) { setMsg({ ok: true, t: `${n} 님의 비밀번호를 새로 정했어요 (인증 ${r.data.count}건)` }); setPw(""); } else if (r.data.code !== "auth") setMsg({ ok: false, t: failMsg(r, "바꾸지 못했어요") });
+  };
+  return (
+    <div style={{ marginTop: 14, padding: 12, background: C.bg, borderRadius: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: C.navy, marginBottom: 8 }}>🔑 참가자 비밀번호 초기화</div>
+      <div style={{ fontSize: 11, color: C.light, marginBottom: 8, lineHeight: 1.6 }}>비밀번호를 잊은 참가자의 이름과 새 번호를 정해주면, 그 이름의 모든 인증 비밀번호가 새 번호로 바뀌어요. 기록(연속·인증일)은 그대로예요.</div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="이름" maxLength={30} style={{ ...inputStyle, flex: 1 }} />
+        <input value={pw} onChange={e => setPw(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="새 번호 4자리" inputMode="numeric" style={{ ...inputStyle, width: 120 }} />
+      </div>
+      <button onClick={go} disabled={busy} style={{ marginTop: 8, background: C.navy, color: "#fff", border: "none", borderRadius: 10, padding: "9px 16px", fontWeight: 800, cursor: "pointer", fontSize: 13 }}>{busy ? "바꾸는 중…" : "비밀번호 새로 정하기"}</button>
+      {msg && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: msg.ok ? C.ok : C.err }}>{msg.ok ? "✅ " : "⚠️ "}{msg.t}</div>}
+    </div>
+  );
+}
 function ChalAdmin({ cfg, examDate, onSaved }) {
   const [name, setName] = useState(cfg.name || "작도 챌린지");
   const [start, setStart] = useState(cfg.start || ""); const [end, setEnd] = useState(cfg.end || examDate || ""); const [goal, setGoal] = useState(String(cfg.goal || 5));
@@ -1004,6 +1027,7 @@ function ChalAdmin({ cfg, examDate, onSaved }) {
         </>);
       })()}
       <div style={{ fontSize: 11, color: C.light, marginTop: 12, lineHeight: 1.7 }}>🗜 올린 지 3주가 지난 사진은 자동으로 작은 사진(확대 불가)이 돼요. <button onClick={async () => { const r = await rpc("sj_admin_chal_purge", { p_token: AUTH.token }); if (r.ok) { setMsg({ ok: true, t: `${r.data.n}장을 작은 사진으로 줄였어요` }); loadUsage(); } }} style={{ border: `1px solid ${C.border}`, background: C.bg, borderRadius: 7, padding: "3px 8px", fontSize: 11, fontWeight: 700, color: C.mid, cursor: "pointer" }}>지금 정리하기</button></div>
+      <ResetPw />
       <div style={{ fontSize: 11, color: C.light, marginTop: 6, lineHeight: 1.7 }}>📦 보관 중인 인증 사진: {usage ? `${usage.count}장 · ${mb}MB` : "확인 중…"} (무료 서버 용량은 약 500MB예요)</div>
       {usage && usage.bytes > 350 * 1048576 && <div style={{ fontSize: 12, color: C.err, fontWeight: 800, marginTop: 6 }}>⚠️ 용량이 {Math.round(usage.bytes / 5242880)}% 찼어요. 500MB가 넘으면 예약 저장도 멈춰요. 오래된 사진을 지우거나 유료 전환이 필요해요.</div>}
     </div>
