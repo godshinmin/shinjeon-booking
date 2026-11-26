@@ -1202,14 +1202,27 @@ function EntryRank() {
         {study.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>이번 주 첫 번째 주인공이 되어보세요! 💪</div>}
         {study.map(p => line(p.name, p.rank, p.name, fmtDur(p.minutes)))}
       </div>}
-      {chal && (
+      {chal && (<>
         <div style={box}>
           <div style={{ color: "#fff", fontSize: 14, fontWeight: 800, display: "flex", justifyContent: "space-between" }}><span>✍️ {chal.name} 전체 TOP 5</span>{chal.end && daysUntil(chal.end) >= 0 && <span style={{ color: C.accent }}>{daysUntil(chal.end) === 0 ? "D-DAY" : `D-${daysUntil(chal.end)}`}</span>}</div>
           <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `하루 한 장만 그려도 인증 1일 · 인증한 날이 많은 순` : `${fmt(chal.start)}(${DAY[new Date(chal.start + "T12:00:00").getDay()]}) 시작`}</div>
           {chalRows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>{chal.started ? "아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪" : "시작하면 이곳에 순위가 나와요"}</div>}
           {chalRows.map(p => line(p.name, p.rank, p.name, `${p.days}일`, chal.streaks))}
         </div>
-      )}
+        {(() => {
+          const hof = Object.entries(chal.streaks || {}).filter(([, v]) => (v.best || 0) >= 30).sort((x, y) => y[1].best - x[1].best || x[0].localeCompare(y[0], "ko"));
+          const next = Object.entries(chal.streaks || {}).filter(([, v]) => (v.cur || 0) >= 7 && (v.cur || 0) < 30).sort((x, y) => y[1].cur - x[1].cur).slice(0, 3);
+          if (!hof.length && !next.length) return null;
+          return (
+            <div style={{ ...box, borderColor: "#FFD27A55" }}>
+              <div style={{ color: "#FFD27A", fontSize: 14, fontWeight: 800 }}>👑 명예의 전당 <span style={{ fontSize: 11, color: "#a0b0cc", fontWeight: 600 }}>30일 연속 인증 달성</span></div>
+              {hof.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "8px 0 4px" }}>아직 달성자가 없어요. 첫 번째 👑이 되어보세요!</div>}
+              {hof.map(([n, v]) => <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderTop: "1px solid #ffffff14", color: "#fff", fontWeight: 800, fontSize: 14 }}><span>👑 {n}</span><span style={{ color: "#FFD27A", fontSize: 12 }}>최고 {v.best}일 연속</span></div>)}
+              {next.length > 0 && <div style={{ color: "#a0b0cc", fontSize: 11, marginTop: 8, lineHeight: 1.7 }}>🔥 도전 중: {next.map(([n, v]) => `${n} ${v.cur}일`).join(" · ")}</div>}
+            </div>
+          );
+        })()}
+      </>)}
     </div>
   );
 }
