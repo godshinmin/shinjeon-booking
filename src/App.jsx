@@ -911,8 +911,9 @@ function ChalPostSheet({ title, onClose, onDone }) {
           {preview && <img src={preview} alt="미리보기" style={{ marginTop: 8, width: "100%", maxHeight: 220, objectFit: "contain", borderRadius: 10, background: C.bg }} />}
         </div>
         <div>
-          <label style={labelStyle}>삭제용 비밀번호 (숫자 4자리) *</label>
-          <input type="password" inputMode="numeric" maxLength={4} value={pw} onChange={e => setPw(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="잘못 올렸을 때 지울 때 필요해요" style={{ ...inputStyle, letterSpacing: 8 }} />
+          <label style={labelStyle}>내 비밀번호 (숫자 4자리) *</label>
+          <input type="password" inputMode="numeric" maxLength={4} value={pw} onChange={e => setPw(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="항상 같은 번호로 입력해주세요" style={{ ...inputStyle, letterSpacing: 8 }} />
+          <div style={{ fontSize: 10, color: C.light, marginTop: 5, lineHeight: 1.6 }}>🔒 <b>이름 + 비밀번호</b>가 나예요. 처음 정한 번호를 계속 써주세요. 이름이 같은 다른 분은 번호가 다르면 이름 뒤에 B 같은 구분을 붙여요. 잘못 올린 인증을 지울 때도 필요해요.</div>
         </div>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
