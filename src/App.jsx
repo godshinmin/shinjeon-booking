@@ -841,6 +841,22 @@ const rankRows = (rows, keyOf) => {
 const byDays = rows => [...(rows || [])].sort((a, b) => (b.days || 0) - (a.days || 0) || String(a.name).localeCompare(String(b.name), "ko"));
 const COMBO = n => n >= 30 ? ["👑", "#B8860B", "#FFF3C4"] : n >= 21 ? ["🏆", "#B8860B", "#FFF3C4"] : n >= 14 ? ["🥇", "#9A6A00", "#FFF0CC"] : n >= 7 ? ["🏅", "#C2410C", "#FFE7D6"] : n >= 3 ? ["🔥", "#C2410C", "#FFE7D6"] : ["✨", "#4A5A85", "#EEF3FF"];
 const RAINBOW = ["#EF4444", "#F97316", "#FACC15", "#22C55E", "#3B82F6", "#4F46E5", "#A855F7"]; // 빨 주 노 초 파 남 보
+// 요일 칸 색: 연속 인증 n번째 날 = 빨·주·노·초·파·남·보 순서, 2바퀴째부터 칸 안에 ×2, ×3
+function dotLevels(ds, today, cur) {
+  const days = [...(ds || [])].sort(); const out = {};
+  let run = [];
+  const flush = (isLast) => {
+    if (!run.length) return;
+    const last = run[run.length - 1];
+    const live = isLast && cur > 0 && (last === today || last === addDays(today, -1));
+    run.forEach((d, i) => { out[d] = live ? Math.max(1, cur - (run.length - 1 - i)) : i + 1; });
+    run = [];
+  };
+  days.forEach((d, i) => { if (run.length && addDays(run[run.length - 1], 1) !== d) flush(false); run.push(d); });
+  flush(true);
+  return out;
+}
+const dotStyle = (idx) => ({ background: RAINBOW[(idx - 1) % 7], color: ((idx - 1) % 7) === 2 ? "#5B4B00" : "#fff" });
 function Combo({ streaks, name, dark }) {
   const n = streaks && streaks[name] ? streaks[name].cur || 0 : 0;
   if (n < 2) return null;
@@ -850,13 +866,6 @@ function Combo({ streaks, name, dark }) {
   return (
     <div style={{ marginTop: 5, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, fontWeight: 900 }}>
       <span style={{ display: "inline-block", fontSize: 12, padding: "3px 10px", borderRadius: 999, background: col, color: darkTxt ? "#5B4B00" : "#fff", boxShadow: `0 0 10px ${col}99`, animation: "sjGlow 1.6s ease-in-out infinite", whiteSpace: "nowrap" }}>{ic} {n}일 연속{n >= 3 ? " COMBO!" : ""}{k >= 2 ? ` ×${k}` : ""}</span>
-      <span style={{ display: "inline-flex", gap: 3 }}>
-        {RAINBOW.map((c, i) => {
-          const level = i < cyc ? k : k - 1; // 이번 칸까지는 현재 바퀴, 나머지는 지난 바퀴 기록
-          const on = level >= 1;
-          return <span key={i} style={{ width: 22, height: 18, borderRadius: 5, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, background: on ? c : dark ? "#ffffff1a" : "#E6E9F2", opacity: on ? (i < cyc ? 1 : 0.4) : 1, color: i === 2 && on ? "#5B4B00" : "#fff", outline: i === cyc - 1 ? `2px solid ${dark ? "#fff" : C.navy}` : "none", outlineOffset: 1 }}>{on ? (level >= 2 ? `×${level}` : "✓") : ""}</span>;
-        })}
-      </span>
     </div>
   );
 }
@@ -1234,10 +1243,10 @@ function GuestView({ onExit }) {
             {view === "week" && (
               <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
                 {[0, 1, 2, 3, 4, 5, 6].map(i => {
-                  const d = addDays(chal.week_start, i); const inRange = d <= chal.week_end; const on = (p.ds || []).includes(d);
+                  const d = addDays(chal.week_start, i); const inRange = d <= chal.week_end; const on = (p.ds || []).includes(d); const lv = dotLevels(p.ds, chal.today, (chal.streaks && chal.streaks[p.name] && chal.streaks[p.name].cur) || 0)[d] || 1;
                   return (
                     <div key={i} style={{ flex: 1, textAlign: "center", opacity: inRange ? 1 : 0.25 }}>
-                      <div style={{ height: 18, borderRadius: 5, background: on ? (p.days >= goal ? C.ok : C.blue) : C.bg, border: `1px solid ${on ? "transparent" : C.border}`, color: "#fff", fontSize: 11, lineHeight: "18px", fontWeight: 900 }}>{on ? "✓" : ""}</div>
+                      <div style={{ height: 18, borderRadius: 5, ...(on ? dotStyle(lv) : { background: C.bg }), border: `1px solid ${on ? "transparent" : C.border}`, fontSize: 11, lineHeight: "18px", fontWeight: 900 }}>{on ? (lv > 7 ? `×${Math.ceil(lv / 7)}` : "✓") : ""}</div>
                       <div style={{ fontSize: 9, color: C.light, marginTop: 2 }}>{DAY[new Date(d + "T12:00:00").getDay()]}</div>
                     </div>
                   );
@@ -1494,10 +1503,10 @@ function ChallengeTab({ admin }) {
                 </div>
                 <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
                   {[0, 1, 2, 3, 4, 5, 6].map(i => {
-                    const d = addDays(data.week_start, i); const inRange = d <= data.week_end; const on = (p.ds || []).includes(d); const wd = DAY[new Date(d + "T12:00:00").getDay()];
+                    const d = addDays(data.week_start, i); const inRange = d <= data.week_end; const on = (p.ds || []).includes(d); const wd = DAY[new Date(d + "T12:00:00").getDay()]; const lv = dotLevels(p.ds, data.today, (data.streaks && data.streaks[p.name] && data.streaks[p.name].cur) || 0)[d] || 1;
                     return (
                       <div key={i} style={{ flex: 1, textAlign: "center", opacity: inRange ? 1 : 0.25 }}>
-                        <div style={{ height: 18, borderRadius: 5, background: on ? (p.days >= goal ? C.ok : C.blue) : C.bg, border: `1px solid ${on ? "transparent" : C.border}`, color: "#fff", fontSize: 11, lineHeight: "18px", fontWeight: 900 }}>{on ? "✓" : ""}</div>
+                        <div style={{ height: 18, borderRadius: 5, ...(on ? dotStyle(lv) : { background: C.bg }), border: `1px solid ${on ? "transparent" : C.border}`, fontSize: 11, lineHeight: "18px", fontWeight: 900 }}>{on ? (lv > 7 ? `×${Math.ceil(lv / 7)}` : "✓") : ""}</div>
                         <div style={{ fontSize: 9, color: d === data.today ? C.blue : C.light, fontWeight: d === data.today ? 900 : 400, marginTop: 2 }}>{wd}</div>
                       </div>
                     );
