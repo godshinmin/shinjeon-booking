@@ -1124,7 +1124,7 @@ function ChalSettings({ examDate }) {
 function GuestView({ onExit }) {
   const wide = useWide(900);
   const [tab, setTab] = useState("book");
-  const [info, setInfo] = useState(null); const [chal, setChal] = useState(null); const [week, setWeek] = useState(null); const [view, setView] = useState("week"); const [fail, setFail] = useState("");
+  const todayN = useTodayN(); const [info, setInfo] = useState(null); const [chal, setChal] = useState(null); const [week, setWeek] = useState(null); const [view, setView] = useState("week"); const [fail, setFail] = useState("");
   useEffect(() => {
     let dead = false;
     (async () => {
@@ -1215,9 +1215,9 @@ function GuestView({ onExit }) {
         <div style={{ ...card, background: C.navy, color: "#fff" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {chal.cfg.name}</div>
-            {chal.cfg.end && daysUntil(chal.cfg.end) >= 0 && <div style={{ background: C.accent, color: C.navy, borderRadius: 9, padding: "3px 10px", fontSize: 13, fontWeight: 900 }}>{daysUntil(chal.cfg.end) === 0 ? "D-DAY" : `D-${daysUntil(chal.cfg.end)}`}</div>}
           </div>
           <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{fmt(chal.cfg.start)} ~ {fmt(chal.cfg.end)} · 주 {goal}일 이상 인증 · {chal.started ? `${chal.cur_week}/${chal.cfg.weeks}주차` : "곧 시작"}</div>
+          <BigDday end={chal.cfg.end} n={todayN} />
         </div>
         <div style={{ marginBottom: 12, marginTop: -4 }}><ComboGuide /></div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
@@ -1287,8 +1287,39 @@ function GuestView({ onExit }) {
 }
 
 // 입장 코드 화면 아래 순위판: 이번 주 자습실 이용 TOP 5 + 작도 챌린지 전체 TOP 5 (입장 전에도 볼 수 있고, 이름은 가려서 보여줘요)
+
+function useTodayN() {
+  const [n, setN] = useState(null);
+  useEffect(() => {
+    let dead = false;
+    const go = async () => { const r = await rpc("sj_chal_today", {}, true); if (!dead && r.ok && r.data && r.data.ok) setN(r.data.people); };
+    go();
+    const t = setInterval(() => { if (document.visibilityState !== "hidden") go(); }, 60000);
+    return () => { dead = true; clearInterval(t); };
+  }, []);
+  return n;
+}
+function BigDday({ end, n, dark }) {
+  const dd = end ? daysUntil(end) : null;
+  const show = dd !== null && dd >= 0;
+  if (!show && n === null) return null;
+  return (
+    <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "stretch" }}>
+      {show && <div style={{ flex: 1.2, background: C.accent, color: C.navy, borderRadius: 14, padding: "10px 8px", textAlign: "center" }}>
+        <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.8 }}>건축사 시험까지</div>
+        <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, letterSpacing: 1 }}>{dd === 0 ? "D-DAY" : `D-${dd}`}</div>
+      </div>}
+      {n !== null && <div style={{ flex: 1, background: dark ? "#ffffff18" : "#ffffff18", border: "1px solid #ffffff33", color: "#fff", borderRadius: 14, padding: "10px 8px", textAlign: "center" }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "#a0b0cc" }}>오늘 인증</div>
+        <div style={{ fontSize: 30, fontWeight: 900, lineHeight: 1.15 }}>{n}<span style={{ fontSize: 14, fontWeight: 800 }}>명</span></div>
+      </div>}
+    </div>
+  );
+}
+
 function EntryRank() {
   const [d, setD] = useState(null);
+  const todayN = useTodayN();
   useEffect(() => {
     let dead = false;
     const go = async () => { const r = await rpc("sj_public_board", {}, true); if (!dead && r.ok && r.data.ok) setD(r.data); };
@@ -1319,7 +1350,8 @@ function EntryRank() {
       </div>}
       {chal && (<>
         <div style={box}>
-          <div style={{ color: "#fff", fontSize: 14, fontWeight: 800, display: "flex", justifyContent: "space-between" }}><span>✍️ {chal.name} 전체 TOP 5</span>{chal.end && daysUntil(chal.end) >= 0 && <span style={{ color: C.accent }}>{daysUntil(chal.end) === 0 ? "D-DAY" : `D-${daysUntil(chal.end)}`}</span>}</div>
+          <div style={{ color: "#fff", fontSize: 14, fontWeight: 800, display: "flex", justifyContent: "space-between" }}><span>✍️ {chal.name} 전체 TOP 5</span></div>
+          <BigDday end={chal.end} n={todayN} dark />
           <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `하루 한 장만 그려도 인증 1일 · 인증한 날이 많은 순` : `${fmt(chal.start)}(${DAY[new Date(chal.start + "T12:00:00").getDay()]}) 시작`}</div>
           {chalRows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>{chal.started ? "아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪" : "시작하면 이곳에 순위가 나와요"}</div>}
           {chalRows.map(p => line(p.name, p.rank, p.name, `${p.days}일`, chal.streaks))}
@@ -1414,6 +1446,7 @@ function Gallery({ names, onOpen, reloadKey, mineMode }) {
 }
 
 function ChallengeTab({ admin }) {
+  const todayN = useTodayN();
   const [data, setData] = useState(null); const [fail, setFail] = useState(""); const [week, setWeek] = useState(null);
   const [view, setView] = useState("week"); const [posting, setPosting] = useState(false); const [open, setOpen] = useState(null);
   const [thumbs, setThumbs] = useState({}); const reqId = useRef(0);
@@ -1463,9 +1496,9 @@ function ChallengeTab({ admin }) {
         <div style={{ background: C.navy, borderRadius: 16, padding: "16px 16px 14px", color: "#fff", marginBottom: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {cfg.name}</div>
-            {cfg.end && daysUntil(cfg.end) >= 0 && <div style={{ background: C.accent, color: C.navy, borderRadius: 9, padding: "3px 10px", fontSize: 13, fontWeight: 900, whiteSpace: "nowrap" }}>{daysUntil(cfg.end) === 0 ? "D-DAY" : `D-${daysUntil(cfg.end)}`}</div>}
           </div>
           <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{cfg.end ? `${fmt(cfg.start)} ~ ${fmt(cfg.end)} · ` : ""}{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 ${goal}일 이상 인증 (7일 단위)` : `${fmt(cfg.start)}(${DAY[new Date(cfg.start + "T12:00:00").getDay()]})에 시작해요`}</div>
+          <BigDday end={cfg.end} n={todayN} />
           {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.days}일 인증 · {mine.rank}등 {mine.days >= goal ? "✅" : past ? "" : `(${goal}일까지 ${goal - mine.days}일 남음)`}</div>}
         </div>
         <button onClick={() => canPost && setPosting(true)} disabled={!canPost} style={{ width: "100%", background: canPost ? C.blue : C.border, color: canPost ? "#fff" : C.mid, border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: canPost ? "pointer" : "default", marginBottom: canPost ? 14 : 4 }}>{canPost ? "📸 오늘 작도 인증 올리기" : data.ended ? "챌린지가 끝났어요" : `📸 ${fmt(cfg.start)}부터 인증을 올릴 수 있어요`}</button>
