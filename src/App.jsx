@@ -1217,7 +1217,7 @@ function GuestView({ onExit }) {
             <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {chal.cfg.name}</div>
           </div>
           <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{fmt(chal.cfg.start)} ~ {fmt(chal.cfg.end)} · 주 {goal}일 이상 인증 · {chal.started ? `${chal.cur_week}/${chal.cfg.weeks}주차` : "곧 시작"}</div>
-          <BigDday end={chal.cfg.end} n={todayN} />
+          <BigDday end={chal.cfg.end} t={todayN} />
         </div>
         <div style={{ marginBottom: 12, marginTop: -4 }}><ComboGuide /></div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
@@ -1292,14 +1292,15 @@ function useTodayN() {
   const [n, setN] = useState(null);
   useEffect(() => {
     let dead = false;
-    const go = async () => { const r = await rpc("sj_chal_today", {}, true); if (!dead && r.ok && r.data && r.data.ok) setN(r.data.people); };
+    const go = async () => { const r = await rpc("sj_chal_today", {}, true); if (!dead && r.ok && r.data && r.data.ok) setN({ n: r.data.people, m: r.data.members }); };
     go();
     const t = setInterval(() => { if (document.visibilityState !== "hidden") go(); }, 60000);
     return () => { dead = true; clearInterval(t); };
   }, []);
   return n;
 }
-function BigDday({ end, n, dark }) {
+function BigDday({ end, t, dark }) {
+  const n = t ? t.n : null; const m = t ? t.m : null;
   const dd = end ? daysUntil(end) : null;
   const show = dd !== null && dd >= 0;
   if (!show && n === null) return null;
@@ -1309,12 +1310,38 @@ function BigDday({ end, n, dark }) {
         <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.8 }}>건축사 시험까지</div>
         <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, letterSpacing: 1 }}>{dd === 0 ? "D-DAY" : `D-${dd}`}</div>
       </div>}
-      {n !== null && <div style={{ flex: 1, background: dark ? "#ffffff18" : "#ffffff18", border: "1px solid #ffffff33", color: "#fff", borderRadius: 14, padding: "10px 8px", textAlign: "center" }}>
+      {m != null && <div style={{ flex: 1, background: "#ffffff18", border: "1px solid #ffffff33", color: "#fff", borderRadius: 14, padding: "10px 8px", textAlign: "center" }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "#a0b0cc" }}>참여자</div>
+        <div style={{ fontSize: 30, fontWeight: 900, lineHeight: 1.15 }}>{m}<span style={{ fontSize: 14, fontWeight: 800 }}>명</span></div>
+      </div>}
+      {n != null && <div style={{ flex: 1, background: "#ffffff18", border: "1px solid #ffffff33", color: "#fff", borderRadius: 14, padding: "10px 8px", textAlign: "center" }}>
         <div style={{ fontSize: 11, fontWeight: 800, color: "#a0b0cc" }}>오늘 인증</div>
         <div style={{ fontSize: 30, fontWeight: 900, lineHeight: 1.15 }}>{n}<span style={{ fontSize: 14, fontWeight: 800 }}>명</span></div>
       </div>}
     </div>
   );
+}
+
+function KakaoCopy({ data, t }) {
+  const [ok, setOk] = useState(false);
+  const build = () => {
+    const rows = rankRows(byDays(data.total), p => `${p.days}`);
+    const g = {}; rows.forEach(p => { (g[p.rank] = g[p.rank] || { days: p.days, names: [] }).names.push(p.name); });
+    const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
+    const dd = data.cfg && data.cfg.end ? daysUntil(data.cfg.end) : null;
+    const L = [`🔥 ${data.cfg.name}`, `📅 ${fmt(data.today)} 현황${dd !== null && dd >= 0 ? ` · 시험 ${dd === 0 ? "D-DAY" : "D-" + dd}` : ""}`,
+      `✍️ 참여 ${t && t.m != null ? t.m : rows.length}명${t && t.n != null ? ` · 오늘 인증 ${t.n}명` : ""}`, "", "🏆 누적 순위 (인증한 날 기준)"];
+    Object.keys(g).map(Number).sort((a, b) => a - b).forEach(r => L.push(`${medal(r)} ${g[r].days}일 (${g[r].names.length}명): ${g[r].names.join(", ")}`));
+    L.push("", "하루 한 장이면 인증 OK! 연속하면 🔥 COMBO", "앱에서 인증하고 순위 확인 👉 https://shinjeon-booking.vercel.app");
+    return L.join("\n");
+  };
+  const copy = async () => {
+    const text = build();
+    try { await navigator.clipboard.writeText(text); }
+    catch { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch {} document.body.removeChild(ta); }
+    setOk(true); setTimeout(() => setOk(false), 2500);
+  };
+  return <button onClick={copy} style={{ width: "100%", background: "#FEE500", color: "#3A1D1D", border: "none", borderRadius: 13, padding: 12, fontWeight: 900, fontSize: 14, cursor: "pointer", marginBottom: 12 }}>{ok ? "복사됐어요 ✅ 톡방에 붙여넣기" : "💬 톡방에 올릴 순위 복사 (관리자)"}</button>;
 }
 
 function EntryRank() {
@@ -1351,7 +1378,7 @@ function EntryRank() {
       {chal && (<>
         <div style={box}>
           <div style={{ color: "#fff", fontSize: 14, fontWeight: 800, display: "flex", justifyContent: "space-between" }}><span>✍️ {chal.name} 전체 TOP 5</span></div>
-          <BigDday end={chal.end} n={todayN} dark />
+          <BigDday end={chal.end} t={todayN} dark />
           <div style={{ color: "#a0b0cc", fontSize: 11, margin: "3px 0 10px" }}>{chal.started ? `하루 한 장만 그려도 인증 1일 · 인증한 날이 많은 순` : `${fmt(chal.start)}(${DAY[new Date(chal.start + "T12:00:00").getDay()]}) 시작`}</div>
           {chalRows.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "6px 0 8px" }}>{chal.started ? "아직 인증이 없어요. 첫 번째 주인공이 되어보세요! 💪" : "시작하면 이곳에 순위가 나와요"}</div>}
           {chalRows.map(p => line(p.name, p.rank, p.name, `${p.days}일`, chal.streaks))}
@@ -1498,9 +1525,10 @@ function ChallengeTab({ admin }) {
             <div style={{ fontSize: 16, fontWeight: 900 }}>✍️ {cfg.name}</div>
           </div>
           <div style={{ fontSize: 12, color: "#a0b0cc", marginTop: 4 }}>{cfg.end ? `${fmt(cfg.start)} ~ ${fmt(cfg.end)} · ` : ""}{data.ended ? "챌린지가 끝났어요 🎉" : data.started ? `${data.cur_week}/${cfg.weeks}주차 진행 중 · 주 ${goal}일 이상 인증 (7일 단위)` : `${fmt(cfg.start)}(${DAY[new Date(cfg.start + "T12:00:00").getDay()]})에 시작해요`}</div>
-          <BigDday end={cfg.end} n={todayN} />
+          <BigDday end={cfg.end} t={todayN} />
           {mine && <div style={{ fontSize: 13, marginTop: 10, color: C.accent, fontWeight: 800 }}>내 기록: {mine.name} · {mine.days}일 인증 · {mine.rank}등 {mine.days >= goal ? "✅" : past ? "" : `(${goal}일까지 ${goal - mine.days}일 남음)`}</div>}
         </div>
+        {admin && <KakaoCopy data={data} t={todayN} />}
         <button onClick={() => canPost && setPosting(true)} disabled={!canPost} style={{ width: "100%", background: canPost ? C.blue : C.border, color: canPost ? "#fff" : C.mid, border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: canPost ? "pointer" : "default", marginBottom: canPost ? 14 : 4 }}>{canPost ? "📸 오늘 작도 인증 올리기" : data.ended ? "챌린지가 끝났어요" : `📸 ${fmt(cfg.start)}부터 인증을 올릴 수 있어요`}</button>
         {canPost && <div style={{ fontSize: 11, color: C.mid, textAlign: "center", marginBottom: 14 }}>✅ 완성된 도면만 올려주세요 · 하루 한 장이면 OK · 연속하면 🔥 COMBO!</div>}
         <div style={{ marginBottom: 14, marginTop: -6 }}><ComboGuide /></div>

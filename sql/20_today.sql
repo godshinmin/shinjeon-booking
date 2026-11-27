@@ -2,7 +2,8 @@
 create or replace function public.sj_chal_today() returns jsonb language sql security definer set search_path = public, sj_private as $$
   select jsonb_build_object('ok', true,
     'people', (select count(distinct name) from sj_private.chal_posts where day = (now() at time zone 'Asia/Seoul')::date::text),
-    'posts',  (select count(*) from sj_private.chal_posts where day = (now() at time zone 'Asia/Seoul')::date::text));
+    'posts',  (select count(*) from sj_private.chal_posts where day = (now() at time zone 'Asia/Seoul')::date::text),
+    'members', (select count(distinct name) from sj_private.chal_posts));
 $$;
 grant execute on function public.sj_chal_today() to anon, authenticated;
 notify pgrst, 'reload schema';
