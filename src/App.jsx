@@ -868,6 +868,28 @@ function Combo({ streaks, name, dark }) {
   );
 }
 const COMBO_TIERS = [["✨", "2일 연속", "좋은 시작!"], ["🔥", "3일 연속", "COMBO 시작! 불이 붙었어요"], ["🏅", "7일 연속", "일주일 개근 메달"], ["🥇", "14일 연속", "2주 연속, 금메달"], ["🏆", "21일 연속", "3주 연속, 트로피"], ["👑", "30일 연속", "명예의 전당 입성!"]];
+function StreakBoard({ streaks }) {
+  const rows = Object.entries(streaks || {}).map(([name, v]) => ({ name, cur: v.cur || 0, best: v.best || 0 })).filter(r => r.cur >= 1)
+    .sort((a, b) => b.cur - a.cur || b.best - a.best || a.name.localeCompare(b.name, "ko"));
+  let rk = 0, prev = null; rows.forEach((r, i) => { if (r.cur !== prev) { rk = i + 1; prev = r.cur; } r.rank = rk; });
+  const medal = r => r === 1 ? "🥇" : r === 2 ? "🥈" : r === 3 ? "🥉" : `${r}등`;
+  if (!rows.length) return <div style={{ textAlign: "center", padding: 30, color: C.mid, fontSize: 13 }}>아직 연속 기록이 없어요. 오늘부터 시작해 보세요! 🔥</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontSize: 11, color: C.light }}>지금 연속으로 인증 중인 일수 순이에요 (같은 일수는 같은 등수) · 하루 빠지면 처음부터!</div>
+      {rows.map(p => (
+        <div key={p.name} style={{ background: C.card, border: `1px solid ${p.rank <= 3 ? C.accent : C.border}`, borderRadius: 13, padding: "11px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}<Combo streaks={streaks} name={p.name} /></div>
+            <div style={{ fontSize: 11, color: C.mid }}>지금 {p.cur}일 연속 · 최고 {p.best}일</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ComboGuide({ dark }) {
   const fg = dark ? "#fff" : C.navy, sub = dark ? "#a0b0cc" : C.mid;
   return (
@@ -1221,7 +1243,7 @@ function GuestView({ onExit }) {
         </div>
         <div style={{ marginBottom: 12, marginTop: -4 }}><ComboGuide /></div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          {[["week", "주간 순위"], ["total", "누적 순위"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13, border: `1.5px solid ${view === k ? C.blue : C.border}`, background: view === k ? C.blue : C.card, color: view === k ? "#fff" : C.mid }}>{l}</button>)}
+          {[["week", "주간 순위"], ["total", "누적 순위"], ["streak", "🔥 연속"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13, border: `1.5px solid ${view === k ? C.blue : C.border}`, background: view === k ? C.blue : C.card, color: view === k ? "#fff" : C.mid }}>{l}</button>)}
         </div>
         {view === "week" && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -1230,8 +1252,8 @@ function GuestView({ onExit }) {
             <button onClick={() => setWeek(Math.min(chal.cfg.weeks, chal.week + 1))} disabled={chal.week >= chal.cfg.weeks} style={{ border: `1px solid ${C.border}`, background: C.card, borderRadius: 9, padding: "7px 12px", cursor: "pointer", color: C.mid, opacity: chal.week >= chal.cfg.weeks ? 0.4 : 1 }}>▶</button>
           </div>
         )}
-        {(view === "week" ? wk : tt).length === 0 && <div style={{ ...card, textAlign: "center", color: C.mid, fontSize: 13 }}>아직 인증이 없어요</div>}
-        {(view === "week" ? wk : tt).map(p => (
+        {view !== "streak" && (view === "week" ? wk : tt).length === 0 && <div style={{ ...card, textAlign: "center", color: C.mid, fontSize: 13 }}>아직 인증이 없어요</div>}
+        {view === "streak" ? <StreakBoard streaks={chal.streaks} /> : (view === "week" ? wk : tt).map(p => (
           <div key={p.name} style={{ ...card, padding: 12, marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, textAlign: "center", fontSize: p.rank <= 3 ? 22 : 14, fontWeight: 900, color: C.navy }}>{medal(p.rank)}</div>
@@ -1535,7 +1557,7 @@ function ChallengeTab({ admin }) {
         {!canPost && !data.ended && <div style={{ fontSize: 11, color: C.light, textAlign: "center", marginBottom: 14 }}>시작일부터 이 자리에 인증 올리기 버튼이 활성화돼요</div>}
 
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          {[["week", "주간 순위"], ["total", "누적 순위"], ["gallery", "📷 전체 도면"], ["mine", "🙋 내 작도"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 2px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 12,
+          {[["week", "주간 순위"], ["total", "누적 순위"], ["streak", "🔥 연속"], ["gallery", "📷 전체 도면"], ["mine", "🙋 내 작도"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "10px 2px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 12,
             border: `1.5px solid ${view === k ? C.blue : C.border}`, background: view === k ? C.blue : C.card, color: view === k ? "#fff" : C.mid }}>{l}</button>)}
         </div>
 
@@ -1593,6 +1615,8 @@ function ChallengeTab({ admin }) {
             ))}
           </div>
         )}
+
+        {view === "streak" && <StreakBoard streaks={data.streaks} />}
 
         {(view === "gallery" || view === "mine") && <Gallery key={view} mineMode={view === "mine"} names={data.total.map(t => t.name)} onOpen={setOpen} reloadKey={data.feed.length} />}
 
