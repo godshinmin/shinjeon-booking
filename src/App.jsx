@@ -864,9 +864,7 @@ function Combo({ streaks, name, dark }) {
   const k = Math.ceil(n / 7); const cyc = ((n - 1) % 7) + 1; const col = RAINBOW[cyc - 1];
   const darkTxt = cyc === 3; // 노랑 위에는 어두운 글씨
   return (
-    <div style={{ marginTop: 5, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, fontWeight: 900 }}>
-      <span style={{ display: "inline-block", fontSize: 12, padding: "3px 10px", borderRadius: 999, background: col, color: darkTxt ? "#5B4B00" : "#fff", boxShadow: `0 0 10px ${col}99`, animation: "sjGlow 1.6s ease-in-out infinite", whiteSpace: "nowrap" }}>{ic} {n}일 연속{n >= 3 ? " COMBO!" : ""}{k >= 2 ? ` ×${k}` : ""}</span>
-    </div>
+    <span style={{ display: "inline-block", marginLeft: 8, fontSize: dark ? 13 : 15, fontWeight: 900, padding: dark ? "3px 11px" : "4px 13px", borderRadius: 999, background: col, color: darkTxt ? "#5B4B00" : "#fff", boxShadow: `0 0 12px ${col}AA`, animation: "sjGlow 1.6s ease-in-out infinite", whiteSpace: "nowrap", verticalAlign: "middle", lineHeight: 1.3 }}>{ic} {n}일 연속{n >= 3 ? " COMBO!" : ""}{k >= 2 ? ` ×${k}` : ""}</span>
   );
 }
 const COMBO_TIERS = [["✨", "2일 연속", "좋은 시작!"], ["🔥", "3일 연속", "COMBO 시작! 불이 붙었어요"], ["🏅", "7일 연속", "일주일 개근 메달"], ["🥇", "14일 연속", "2주 연속, 금메달"], ["🏆", "21일 연속", "3주 연속, 트로피"], ["👑", "30일 연속", "명예의 전당 입성!"]];
