@@ -1530,7 +1530,7 @@ function ChallengeTab({ admin }) {
         </div>
         {admin && <KakaoCopy data={data} t={todayN} />}
         <button onClick={() => canPost && setPosting(true)} disabled={!canPost} style={{ width: "100%", background: canPost ? C.blue : C.border, color: canPost ? "#fff" : C.mid, border: "none", borderRadius: 13, padding: 14, fontWeight: 900, fontSize: 15, cursor: canPost ? "pointer" : "default", marginBottom: canPost ? 14 : 4 }}>{canPost ? "📸 오늘 작도 인증 올리기" : data.ended ? "챌린지가 끝났어요" : `📸 ${fmt(cfg.start)}부터 인증을 올릴 수 있어요`}</button>
-        {canPost && <div style={{ fontSize: 11, color: C.mid, textAlign: "center", marginBottom: 14 }}>✅ 완성된 도면만 올려주세요 · 하루 한 장이면 OK · 연속하면 🔥 COMBO!</div>}
+        {canPost && <div style={{ fontSize: 11, color: C.mid, textAlign: "center", marginBottom: 14 }}>✅ 완성된 도면만 올려주세요 · 하루(새벽 5시 기준) 한 장이면 OK · 연속하면 🔥 COMBO!</div>}
         <div style={{ marginBottom: 14, marginTop: -6 }}><ComboGuide /></div>
         {!canPost && !data.ended && <div style={{ fontSize: 11, color: C.light, textAlign: "center", marginBottom: 14 }}>시작일부터 이 자리에 인증 올리기 버튼이 활성화돼요</div>}
 

@@ -41,13 +41,34 @@ begin
 end $$;
 
 -- 오늘 작도 인증한 사람 수 (이름 없이 숫자만 공개)
+-- 작도 챌린지의 '하루' 기준: 새벽 5시 (0~5시에 올린 인증은 전날로 계산)
+create or replace function sj_private.chal_now() returns timestamp language sql stable as $f$
+  select (now() at time zone 'Asia/Seoul') - interval '5 hours';
+$f$;
 create or replace function public.sj_chal_today() returns jsonb language sql security definer set search_path = public, sj_private as $$
   select jsonb_build_object('ok', true,
-    'people', (select count(distinct name) from sj_private.chal_posts where day = (now() at time zone 'Asia/Seoul')::date::text),
-    'posts',  (select count(*) from sj_private.chal_posts where day = (now() at time zone 'Asia/Seoul')::date::text),
+    'people', (select count(distinct name) from sj_private.chal_posts where day = sj_private.chal_now()::date::text),
+    'posts',  (select count(*) from sj_private.chal_posts where day = sj_private.chal_now()::date::text),
     'members', (select count(distinct name) from sj_private.chal_posts));
 $$;
 grant execute on function public.sj_chal_today() to anon, authenticated;
+
+-- 새벽 5시 기준 적용: 작도 인증 관련 함수들의 '오늘' 계산을 chal_now() 로 바꿔요 (자습실 예약 시간은 그대로)
+do $$
+declare r record; d text; n int := 0;
+begin
+  for r in select p.oid from pg_proc p join pg_namespace s on s.oid = p.pronamespace
+            where (s.nspname = 'public' and p.proname in ('sj_chal_post','sj_chal_board','sj_public_chal'))
+               or (s.nspname = 'sj_private' and p.proname = 'chal_streaks')
+  loop
+    d := pg_get_functiondef(r.oid);
+    if position('now() at time zone ''Asia/Seoul''' in d) > 0 then
+      d := replace(d, 'now() at time zone ''Asia/Seoul''', 'sj_private.chal_now()');
+      execute d; n := n + 1;
+    end if;
+  end loop;
+  raise notice '새벽 5시 기준 적용: % 개 함수', n;
+end $$;
 revoke all on all functions in schema sj_private from public, anon, authenticated;
 notify pgrst, 'reload schema';
 
@@ -160,4 +181,4 @@ grant execute on function public.sj_admin_chal_trash_photo(text, text) to anon, 
 revoke all on all functions in schema sj_private from public, anon, authenticated;
 notify pgrst, 'reload schema';
 
-select 'OK 작도 챌린지 업데이트 한 번에 준비 완료 (외부 코드·이름 규칙·비밀번호 초기화·삭제 3일 보관)' as result;
+select 'OK 작도 챌린지 업데이트 한 번에 준비 완료 (외부 코드·이름 규칙·비밀번호 초기화·삭제 3일 보관·오늘 인원·새벽 5시 기준)' as result;
