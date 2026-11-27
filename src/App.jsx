@@ -840,11 +840,25 @@ const rankRows = (rows, keyOf) => {
 };
 const byDays = rows => [...(rows || [])].sort((a, b) => (b.days || 0) - (a.days || 0) || String(a.name).localeCompare(String(b.name), "ko"));
 const COMBO = n => n >= 30 ? ["👑", "#B8860B", "#FFF3C4"] : n >= 21 ? ["🏆", "#B8860B", "#FFF3C4"] : n >= 14 ? ["🥇", "#9A6A00", "#FFF0CC"] : n >= 7 ? ["🏅", "#C2410C", "#FFE7D6"] : n >= 3 ? ["🔥", "#C2410C", "#FFE7D6"] : ["✨", "#4A5A85", "#EEF3FF"];
+const RAINBOW = ["#EF4444", "#F97316", "#FACC15", "#22C55E", "#3B82F6", "#4F46E5", "#A855F7"]; // 빨 주 노 초 파 남 보
 function Combo({ streaks, name, dark }) {
   const n = streaks && streaks[name] ? streaks[name].cur || 0 : 0;
   if (n < 2) return null;
-  const [ic, fg, bg] = COMBO(n);
-  return <span style={{ marginLeft: 6, display: "inline-block", fontSize: 10, fontWeight: 900, padding: "2px 7px", borderRadius: 999, background: dark ? "#ffffff1f" : bg, color: dark ? "#FFD27A" : fg, verticalAlign: "middle", whiteSpace: "nowrap" }}>{ic} {n}일 연속{n >= 3 ? " COMBO!" : ""}</span>;
+  const [ic] = COMBO(n);
+  const k = Math.ceil(n / 7); const cyc = ((n - 1) % 7) + 1; const col = RAINBOW[cyc - 1];
+  const darkTxt = cyc === 3; // 노랑 위에는 어두운 글씨
+  return (
+    <div style={{ marginTop: 5, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, fontWeight: 900 }}>
+      <span style={{ display: "inline-block", fontSize: 12, padding: "3px 10px", borderRadius: 999, background: col, color: darkTxt ? "#5B4B00" : "#fff", boxShadow: `0 0 10px ${col}99`, animation: "sjGlow 1.6s ease-in-out infinite", whiteSpace: "nowrap" }}>{ic} {n}일 연속{n >= 3 ? " COMBO!" : ""}{k >= 2 ? ` ×${k}` : ""}</span>
+      <span style={{ display: "inline-flex", gap: 3 }}>
+        {RAINBOW.map((c, i) => {
+          const level = i < cyc ? k : k - 1; // 이번 칸까지는 현재 바퀴, 나머지는 지난 바퀴 기록
+          const on = level >= 1;
+          return <span key={i} style={{ width: 22, height: 18, borderRadius: 5, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, background: on ? c : dark ? "#ffffff1a" : "#E6E9F2", opacity: on ? (i < cyc ? 1 : 0.4) : 1, color: i === 2 && on ? "#5B4B00" : "#fff", outline: i === cyc - 1 ? `2px solid ${dark ? "#fff" : C.navy}` : "none", outlineOffset: 1 }}>{on ? (level >= 2 ? `×${level}` : "✓") : ""}</span>;
+        })}
+      </span>
+    </div>
+  );
 }
 const COMBO_TIERS = [["✨", "2일 연속", "좋은 시작!"], ["🔥", "3일 연속", "COMBO 시작! 불이 붙었어요"], ["🏅", "7일 연속", "일주일 개근 메달"], ["🥇", "14일 연속", "2주 연속, 금메달"], ["🏆", "21일 연속", "3주 연속, 트로피"], ["👑", "30일 연속", "명예의 전당 입성!"]];
 function ComboGuide({ dark }) {
@@ -852,7 +866,7 @@ function ComboGuide({ dark }) {
   return (
     <details style={{ marginTop: 10, background: dark ? "#ffffff10" : "#EEF3FF", borderRadius: 10, padding: "8px 12px", textAlign: "left" }}>
       <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 800, color: dark ? "#FFD27A" : C.navy, listStyle: "none" }}>🔥 COMBO가 뭐예요? <span style={{ fontWeight: 600, color: sub }}>(눌러서 보기)</span></summary>
-      <div style={{ fontSize: 11, color: sub, lineHeight: 1.8, marginTop: 6 }}>하루에 한 장이라도 완성된 도면을 올리면 그날은 인증 OK! 인증한 날이 이어질수록 이름 옆에 배지가 붙어요. 하루라도 건너뛰면 처음부터 다시 세요. (어제까지 이어졌다면 오늘 안에 올리면 유지돼요)</div>
+      <div style={{ fontSize: 11, color: sub, lineHeight: 1.8, marginTop: 6 }}>하루에 한 장이라도 완성된 도면을 올리면 그날은 인증 OK! 인증한 날이 이어질수록 이름 아래에 배지가 붙고, 🌈 빨·주·노·초·파·남·보 칸이 하루에 하나씩 채워져요. 7칸이 다 차면 다음 바퀴는 칸 안에 ×2, ×3…으로 쌓여요. 하루라도 건너뛰면 처음부터 다시 세요. (어제까지 이어졌다면 오늘 안에 올리면 유지돼요)</div>
       {COMBO_TIERS.map(([ic, d, t]) => <div key={d} style={{ display: "flex", gap: 8, fontSize: 12, color: fg, padding: "3px 0" }}><span style={{ width: 22, textAlign: "center" }}>{ic}</span><b style={{ width: 62 }}>{d}</b><span style={{ color: sub }}>{t}</span></div>)}
     </details>
   );
