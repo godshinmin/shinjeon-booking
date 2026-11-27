@@ -1,45 +1,4 @@
--- 작도 챌린지 전용 입장 코드(0000) 추가: 이 코드로는 작도 챌린지만 쓸 수 있고, 자습실 예약 기능은 쓸 수 없어요.
--- 자습실 입장 코드(0529)는 그대로예요. (15 이후 실행)
-insert into sj_private.secret (k, v)
-values ('chal_entry', encode(sha256(convert_to('sj:' || '0000', 'UTF8')), 'hex'))
-on conflict (k) do nothing;
-
-create or replace function sj_private.chal_code_ok(p text) returns boolean
-language sql stable as $$
-  select coalesce(p, '') <> '' and length(p) <= 40 and exists (
-    select 1 from sj_private.secret where k = 'chal_entry' and v = encode(sha256(convert_to('sj:' || p, 'UTF8')), 'hex'))
-$$;
-
--- 작도 챌린지 기능은 두 코드 모두 허용 (자습실 예약·내 예약·랭킹·설정은 기존 코드만)
-create or replace function sj_private.chal_ok(p text) returns boolean
-language sql stable as $$ select sj_private.entry_ok(p) or sj_private.chal_code_ok(p) $$;
-
-create or replace function public.sj_entry_check(p_entry text) returns jsonb
-language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
-declare ip text := sj_private.client_ip();
-begin
-  if sj_private.fail_count('entry', ip, 10) >= 30 then return sj_private.err('locked', '잠시 후 다시 시도해주세요.'); end if;
-  if sj_private.entry_ok(p_entry) then return jsonb_build_object('ok', true, 'role', 'full'); end if;
-  if sj_private.chal_code_ok(p_entry) then return jsonb_build_object('ok', true, 'role', 'chal'); end if;
-  perform sj_private.fail_add('entry', ip);
-  return sj_private.err('entry', '코드가 올바르지 않아요');
-end $$;
-
--- 작도 챌린지 함수들의 코드 확인을 chal_ok 로 교체 (현재 서버에 있는 정의를 그대로 가져와 한 줄만 바꿔요)
-do $$
-declare f text; d text; n int;
-begin
-  foreach f in array array['sj_chal_post', 'sj_chal_photo', 'sj_chal_board', 'sj_chal_gallery', 'sj_chal_thumbs', 'sj_chal_del']
-  loop
-    select pg_get_functiondef(p.oid) into d from pg_proc p join pg_namespace s on s.oid = p.pronamespace
-     where s.nspname = 'public' and p.proname = f limit 1;
-    if d is null then raise exception '함수를 찾지 못했어요: %', f; end if;
-    n := (length(d) - length(replace(d, 'sj_private.entry_ok(p_entry)', ''))) / length('sj_private.entry_ok(p_entry)');
-    if n < 1 then raise exception '교체할 곳이 없어요: %', f; end if;
-    execute replace(d, 'sj_private.entry_ok(p_entry)', 'sj_private.chal_ok(p_entry)');
-  end loop;
-end $$;
-
+-- 작도 챌린지 업데이트 한 번에 (16번은 이미 적용돼 있어서 빠졌어요): 오늘 인원 + 이름 규칙/비밀번호 잠금/초기화 + 새벽 5시 기준 + 삭제 3일 보관
 -- 오늘 작도 인증한 사람 수 (이름 없이 숫자만 공개)
 -- 작도 챌린지의 '하루' 기준: 새벽 5시 (0~5시에 올린 인증은 전날로 계산)
 create or replace function sj_private.chal_now() returns timestamp language sql stable as $f$
@@ -52,25 +11,6 @@ create or replace function public.sj_chal_today() returns jsonb language sql sec
     'members', (select count(distinct name) from sj_private.chal_posts));
 $$;
 grant execute on function public.sj_chal_today() to anon, authenticated;
-
--- 새벽 5시 기준 적용: 작도 인증 관련 함수들의 '오늘' 계산을 chal_now() 로 바꿔요 (자습실 예약 시간은 그대로)
-do $$
-declare r record; d text; n int := 0;
-begin
-  for r in select p.oid from pg_proc p join pg_namespace s on s.oid = p.pronamespace
-            where (s.nspname = 'public' and p.proname in ('sj_chal_post','sj_chal_board','sj_public_chal'))
-               or (s.nspname = 'sj_private' and p.proname = 'chal_streaks')
-  loop
-    d := pg_get_functiondef(r.oid);
-    if position('now() at time zone ''Asia/Seoul''' in d) > 0 then
-      d := replace(d, 'now() at time zone ''Asia/Seoul''', 'sj_private.chal_now()');
-      execute d; n := n + 1;
-    end if;
-  end loop;
-  raise notice '새벽 5시 기준 적용: % 개 함수', n;
-end $$;
-revoke all on all functions in schema sj_private from public, anon, authenticated;
-notify pgrst, 'reload schema';
 
 -- 작도 챌린지: 이름 + 비밀번호 4자리로 본인 확인 (동명이인 구분, 남의 이름으로 올리기 방지) (16 이후 실행)
 -- 이미 그 이름으로 올린 기록이 있으면, 처음 쓴 비밀번호와 같아야 올릴 수 있어요. 다르면 동명이인으로 보고 이름을 다르게 쓰도록 안내해요.
@@ -114,7 +54,28 @@ begin
 end $$;
 revoke all on function public.sj_admin_chal_reset_pw(text, text, text) from public;
 grant execute on function public.sj_admin_chal_reset_pw(text, text, text) to anon, authenticated;
-notify pgrst, 'reload schema';
+
+-- 작도 챌린지의 '하루' 기준: 새벽 5시 (0~5시에 올린 인증은 전날로 계산)
+create or replace function sj_private.chal_now() returns timestamp language sql stable as $f$
+  select (now() at time zone 'Asia/Seoul') - interval '5 hours';
+$f$;
+
+-- 새벽 5시 기준 적용: 작도 인증 관련 함수들의 '오늘' 계산을 chal_now() 로 바꿔요 (자습실 예약 시간은 그대로)
+do $$
+declare r record; d text; n int := 0;
+begin
+  for r in select p.oid from pg_proc p join pg_namespace s on s.oid = p.pronamespace
+            where (s.nspname = 'public' and p.proname in ('sj_chal_post','sj_chal_board','sj_public_chal'))
+               or (s.nspname = 'sj_private' and p.proname = 'chal_streaks')
+  loop
+    d := pg_get_functiondef(r.oid);
+    if position('now() at time zone ''Asia/Seoul''' in d) > 0 then
+      d := replace(d, 'now() at time zone ''Asia/Seoul''', 'sj_private.chal_now()');
+      execute d; n := n + 1;
+    end if;
+  end loop;
+  raise notice '새벽 5시 기준 적용: % 개 함수', n;
+end $$;
 
 -- 삭제된 인증을 3일간 관리자가 볼 수 있게 보관 (누가·언제 올렸는지 함께). 사고(부적절한 사진) 대비.
 alter table sj_private.chal_posts add column if not exists up_ip text;
@@ -179,6 +140,7 @@ revoke all on function public.sj_admin_chal_trash_photo(text, text) from public;
 grant execute on function public.sj_admin_chal_trash(text) to anon, authenticated;
 grant execute on function public.sj_admin_chal_trash_photo(text, text) to anon, authenticated;
 revoke all on all functions in schema sj_private from public, anon, authenticated;
+
 notify pgrst, 'reload schema';
 
-select 'OK 작도 챌린지 업데이트 한 번에 준비 완료 (외부 코드·이름 규칙·비밀번호 초기화·삭제 3일 보관·오늘 인원·새벽 5시 기준)' as result;
+select 'OK 작도 챌린지 업데이트 완료 (오늘 인원·이름 규칙·비밀번호 초기화·새벽 5시 기준·삭제 3일 보관)' as result;
