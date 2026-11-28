@@ -813,12 +813,20 @@ function RankingTab({ since }) {
 //  사진은 작게 줄여서 서버에 올리고, 조회·삭제·순위 계산은 모두 서버 함수가 처리해요.
 // ═════════════════════════════════════════════
 const thumbCache = new Map();
-const readImage = file => new Promise((resolve, reject) => {
+const readImageEl = file => new Promise((resolve, reject) => {
   const url = URL.createObjectURL(file); const im = new Image();
   im.onload = () => { URL.revokeObjectURL(url); resolve(im); };
   im.onerror = () => { URL.revokeObjectURL(url); reject(new Error("img")); };
   im.src = url;
 });
+// 일반 방식이 안 되면 브라우저의 다른 해독 방식으로 한 번 더 시도해요
+const readImage = async file => {
+  try { return await readImageEl(file); }
+  catch (e) { if (typeof createImageBitmap === "function") return await createImageBitmap(file); throw e; }
+};
+const photoErrMsg = f => /hei[cf]/i.test((f && (f.type + " " + f.name)) || "")
+  ? "HEIC 사진은 읽을 수 없어요. 갤러리에서 사진을 열어 '캡처(스크린샷)'하거나 JPG로 저장해서 올려주세요"
+  : "사진을 읽지 못했어요. 갤러리에서 다시 선택하거나, 사진을 캡처(스크린샷)해서 올려주세요";
 const shrinkImg = (im, max, q) => {
   const k = Math.min(1, max / Math.max(im.width, im.height));
   const w = Math.max(1, Math.round(im.width * k)), h = Math.max(1, Math.round(im.height * k));
@@ -908,12 +916,15 @@ function ChalPostSheet({ title, onClose, onDone }) {
   const [sess, setSess] = useState(0); const [minutes, setMinutes] = useState("");
   const [file, setFile] = useState(null); const [preview, setPreview] = useState("");
   const [pw, setPw] = useState(""); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
-  const idRef = useRef(uid());
+  const idRef = useRef(uid()); const prepRef = useRef(null);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
   const pick = e => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     setFile(f); setPreview(URL.createObjectURL(f)); setErr("");
+    // 사진을 고르자마자 바로 줄여서 준비해요 (나중에 파일 접근이 끊겨도 올릴 수 있게)
+    const pr = compressPhoto(f).catch(() => null); prepRef.current = pr;
+    pr.then(r => { if (prepRef.current === pr && !r) setErr(photoErrMsg(f)); });
   };
   const submit = async () => {
     const nm = normName(name); const mins = parseInt(minutes, 10);
@@ -925,7 +936,7 @@ function ChalPostSheet({ title, onClose, onDone }) {
     if (!/^\d{4}$/.test(pw)) return setErr("삭제용 비밀번호 숫자 4자리를 입력해주세요");
     setBusy(true); setErr("");
     let img;
-    try { img = await compressPhoto(file); } catch { setBusy(false); return setErr("사진을 읽지 못했어요. 다른 사진으로 시도해주세요"); }
+    try { img = (prepRef.current && await prepRef.current) || await compressPhoto(file); } catch { setBusy(false); return setErr(photoErrMsg(file)); }
     let r = null;
     for (let i = 0; i < 3; i++) { // 같은 번호로 다시 보내므로 중복으로 올라가지 않아요
       r = await rpc("sj_chal_post", { p_entry: AUTH.entry, p: { id: idRef.current, name: nm, sess, minutes: mins, photo: img.photo, thumb: img.thumb, pw } });
