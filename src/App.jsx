@@ -842,6 +842,8 @@ const compressPhoto = async file => {
   if (photo.length > 150000) photo = shrinkImg(im, 800, 0.5);
   return { photo, thumb: shrinkImg(im, 220, 0.6) };
 };
+// 로그인(입장) 전에는 이름 가운데를 가려요: 이현주 → 이*주, 김민 → 김*
+const maskName = n => { const a = [...String(n || "")]; return a.length <= 1 ? a.join("") : a.length === 2 ? a[0] + "*" : a[0] + "*".repeat(a.length - 2) + a[a.length - 1]; };
 const rankRows = (rows, keyOf) => {
   let r = 1;
   return rows.map((p, i) => { if (i > 0 && keyOf(p) !== keyOf(rows[i - 1])) r = i + 1; return { ...p, rank: r }; });
@@ -876,7 +878,7 @@ function Combo({ streaks, name, dark }) {
   );
 }
 const COMBO_TIERS = [["✨", "2일 연속", "좋은 시작!"], ["🔥", "3일 연속", "COMBO 시작! 불이 붙었어요"], ["🏅", "7일 연속", "일주일 개근 메달"], ["🥇", "14일 연속", "2주 연속, 금메달"], ["🏆", "21일 연속", "3주 연속, 트로피"], ["👑", "30일 연속", "명예의 전당 입성!"]];
-function StreakBoard({ streaks }) {
+function StreakBoard({ streaks, mask }) {
   const rows = Object.entries(streaks || {}).map(([name, v]) => ({ name, cur: v.cur || 0, best: v.best || 0 })).filter(r => r.cur >= 1)
     .sort((a, b) => b.cur - a.cur || b.best - a.best || a.name.localeCompare(b.name, "ko"));
   let rk = 0, prev = null; rows.forEach((r, i) => { if (r.cur !== prev) { rk = i + 1; prev = r.cur; } r.rank = rk; });
@@ -889,7 +891,7 @@ function StreakBoard({ streaks }) {
         <div key={p.name} style={{ background: C.card, border: `1px solid ${p.rank <= 3 ? C.accent : C.border}`, borderRadius: 13, padding: "11px 14px", display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 40, fontSize: p.rank <= 3 ? 24 : 15, fontWeight: 900, color: C.navy, textAlign: "center" }}>{medal(p.rank)}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}<Combo streaks={streaks} name={p.name} /></div>
+            <div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{mask ? maskName(p.name) : p.name}<Combo streaks={streaks} name={p.name} /></div>
             <div style={{ fontSize: 11, color: C.mid }}>지금 {p.cur}일 연속 · 최고 {p.best}일</div>
           </div>
         </div>
@@ -1264,11 +1266,11 @@ function GuestView({ onExit }) {
           </div>
         )}
         {view !== "streak" && (view === "week" ? wk : tt).length === 0 && <div style={{ ...card, textAlign: "center", color: C.mid, fontSize: 13 }}>아직 인증이 없어요</div>}
-        {view === "streak" ? <StreakBoard streaks={chal.streaks} /> : (view === "week" ? wk : tt).map(p => (
+        {view === "streak" ? <StreakBoard streaks={chal.streaks} mask /> : (view === "week" ? wk : tt).map(p => (
           <div key={p.name} style={{ ...card, padding: 12, marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, textAlign: "center", fontSize: p.rank <= 3 ? 22 : 14, fontWeight: 900, color: C.navy }}>{medal(p.rank)}</div>
-              <div style={{ flex: 1 }}><div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{p.name}<Combo streaks={chal.streaks} name={p.name} /></div>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{maskName(p.name)}<Combo streaks={chal.streaks} name={p.name} /></div>
                 <div style={{ fontSize: 11, color: C.mid }}>{view === "week" ? `이번 주 ${p.days}일 인증` : `총 ${p.days}일 인증`}</div></div>
             </div>
             {view === "week" && (
@@ -1396,7 +1398,7 @@ function EntryRank() {
   const line = (k, r, name, val, st) => (
     <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: "1px solid #ffffff14" }}>
       <div style={{ width: 34, fontSize: r <= 3 ? 20 : 13, fontWeight: 900, color: "#fff", textAlign: "center" }}>{medal(r)}</div>
-      <div style={{ flex: 1, color: "#fff", fontWeight: 700, fontSize: 14 }}>{name}{st && <Combo streaks={st} name={name} dark />}</div>
+      <div style={{ flex: 1, color: "#fff", fontWeight: 700, fontSize: 14 }}>{maskName(name)}{st && <Combo streaks={st} name={name} dark />}</div>
       <div style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{val}</div>
     </div>
   );
@@ -1425,8 +1427,8 @@ function EntryRank() {
             <div style={{ ...box, borderColor: "#FFD27A55" }}>
               <div style={{ color: "#FFD27A", fontSize: 14, fontWeight: 800 }}>👑 명예의 전당 <span style={{ fontSize: 11, color: "#a0b0cc", fontWeight: 600 }}>30일 연속 인증 달성</span></div>
               {hof.length === 0 && <div style={{ color: "#a0b0cc", fontSize: 12, padding: "8px 0 4px" }}>아직 달성자가 없어요. 첫 번째 👑이 되어보세요!</div>}
-              {hof.map(([n, v]) => <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderTop: "1px solid #ffffff14", color: "#fff", fontWeight: 800, fontSize: 14 }}><span>👑 {n}</span><span style={{ color: "#FFD27A", fontSize: 12 }}>최고 {v.best}일 연속</span></div>)}
-              {next.length > 0 && <div style={{ color: "#a0b0cc", fontSize: 11, marginTop: 8, lineHeight: 1.7 }}>🔥 도전 중: {next.map(([n, v]) => `${n} ${v.cur}일`).join(" · ")}</div>}
+              {hof.map(([n, v]) => <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderTop: "1px solid #ffffff14", color: "#fff", fontWeight: 800, fontSize: 14 }}><span>👑 {maskName(n)}</span><span style={{ color: "#FFD27A", fontSize: 12 }}>최고 {v.best}일 연속</span></div>)}
+              {next.length > 0 && <div style={{ color: "#a0b0cc", fontSize: 11, marginTop: 8, lineHeight: 1.7 }}>🔥 도전 중: {next.map(([n, v]) => `${maskName(n)} ${v.cur}일`).join(" · ")}</div>}
             </div>
           );
         })()}
